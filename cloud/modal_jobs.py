@@ -24,6 +24,7 @@ SCALE_MEMORY_MB = 32768
 HOUR = 3600
 DOWNLOAD_THREADS = 16
 SCALE_DATASET = "deep1b-10M"
+CPU_FIELDS = ("Vendor ID", "CPU family", "Model:", "Model name", "CPU(s)", "Thread", "CPU max MHz", "Flags")
 CONTRACTIONS = ("off", "fast")
 PROBE_SETTINGS = (("4", "default"), ("4", "PASSIVE"), ("1", "default"))
 
@@ -41,7 +42,7 @@ app = modal.App("ez-means", image=image)
 
 def run(command: list[str], threads: int, extra: dict[str, str]) -> str:
     machine = subprocess.run(["lscpu"], capture_output=True, text=True, check=True).stdout
-    header = [line for line in machine.splitlines() if line.startswith(("Model name", "CPU(s)", "Thread", "Flags"))]
+    header = [line for line in machine.splitlines() if line.startswith(CPU_FIELDS)]
     environment = os.environ | extra | {"OMP_NUM_THREADS": str(threads), "OPENBLAS_NUM_THREADS": "1"}
     result = subprocess.run(
         command, cwd=REMOTE_EXPERIMENTS, env=environment, capture_output=True, text=True, check=False
