@@ -18,6 +18,7 @@ GROUPS_PER_PROBE = 16
 
 class RecipeFault(Enum):
     EPOCHS = "epochs must be positive"
+    BATCH = "batch must be at least 1"
     STEP = "alpha0 must be in (0, 1]"
     LAW_DOMAIN = "the scaling law needs n >= 1, k >= 1 and epochs > 0"
 
@@ -39,6 +40,8 @@ class Recipe:
     def __post_init__(self) -> None:
         if not self.epochs > 0:
             raise RecipeError(RecipeFault.EPOCHS)
+        if self.batch < 1:
+            raise RecipeError(RecipeFault.BATCH)
         if not 0 < self.alpha0 <= MAX_ALPHA0:
             raise RecipeError(RecipeFault.STEP)
 

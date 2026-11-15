@@ -54,7 +54,8 @@ def train(x: torch.Tensor, k: int, recipe: Recipe, probes: int | None = None) ->
                 batch = x[order[begin : min(begin + recipe.batch, rows)]]
                 if step % CHECK_EVERY == 0:
                     index.regroup(centroids)
-                index.refresh(centroids)
+                else:
+                    index.refresh(centroids)
                 kernels.accumulate(batch, index.assign(batch), sums, counts)
                 alpha = scheduled(recipe, step, total)
                 kernels.ema(centroids, usage, sums, counts, (pass_sums, pass_counts), alpha, epoch == len(plan) - 1)

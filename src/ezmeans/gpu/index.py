@@ -3,7 +3,7 @@ from enum import Enum
 import torch
 
 from ezmeans.gpu import kernels
-from ezmeans.gpu.constants import CUDA, MATRIX_RANK, MAX_GROUP_SPAN, PAIR_ROWS
+from ezmeans.gpu.constants import CUDA, INT32_MAX, MATRIX_RANK, MAX_GROUP_SPAN, PAIR_ROWS
 from ezmeans.recipe import GROUP_ITERATIONS, group_count
 
 
@@ -17,6 +17,7 @@ class Fault(Enum):
     BAD_PROBES = "probes must be between 1 and the number of groups"
     TOO_MANY_GROUPS = "k needs more groups than the kernels support"
     NOT_GROUPED = "regroup must run before refresh or assign"
+    TOO_MANY_PAIRS = "one assign call takes at most 2**31 - 1 row-probe pairs"
     NOT_FINITE = "every row must be finite, with a norm small enough for float32 squared distances"
     BAD_SIZE = "k must be between 1 and the number of rows, and the epochs must cover at least one row"
 
@@ -82,6 +83,7 @@ class GroupIndex:
             self.fill.zero_()
             kernels.bucket(self.owner, self.group_ends, self.sizes, self.fill, self.order)
             kernels.publish(self.centers, self.sizes, self.rounded, self.rounded_norms, self.groups)
+            kernels.refresh(centroids, self.order, self.members, self.member_norms, self.dims)
         self.grouped = True
 
     def refresh(self, centroids: torch.Tensor) -> None:
@@ -95,6 +97,8 @@ class GroupIndex:
         self.require_groups()
         n, span = len(rows), len(self.sizes)
         pairs = n * self.probes
+        if pairs > INT32_MAX:
+            raise GpuInputError(Fault.TOO_MANY_PAIRS)
         labels = torch.empty(n, dtype=torch.int64, device=self.device)
         if n == 0:
             return labels

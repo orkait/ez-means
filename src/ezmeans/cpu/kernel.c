@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { LANES = 16, CHUNK = 16, STREAMS = 4, MAX_PROBES = 64, ROW_CHUNK = 64, LABEL_CHUNK = 16 };
+enum { LANES = 16, CHUNK = 16, STREAMS = 4, ROW_CHUNK = 64, LABEL_CHUNK = 16 };
 enum Status { DONE = 0, BAD_PROBES = 1, NO_MEMORY = 2, BAD_LABEL = 3, BAD_DIMS = 4, BAD_SIZE = 5, NOT_FINITE = 6 };
 
 static const double PI = 3.14159265358979323846;
@@ -197,8 +197,8 @@ static void label_rows(const float *x, const int64_t *index, int64_t count, int6
 {
 #pragma omp parallel for schedule(dynamic, ROW_CHUNK)
     for (int64_t r = 0; r < count; r++) {
-        float near[MAX_PROBES];
-        int64_t which[MAX_PROBES];
+        float near[probes];
+        int64_t which[probes];
         const float *row = x + index[r] * dims;
         probe(row, groups, cells, dims, probes, near, which);
         nearest(row, cells, dims, which, probes, labels + r);
@@ -257,7 +257,7 @@ static int sum_rows(const float *x, const int64_t *index, int64_t count, int64_t
 int assign(const float *rows, int64_t count, int64_t dims, const float *groups, int64_t group_count, const float *centroids,
            const int64_t *order, const int64_t *offsets, int64_t probes, int64_t *label)
 {
-    if (probes < 1 || probes > MAX_PROBES || probes > group_count)
+    if (probes < 1 || probes > group_count)
         return BAD_PROBES;
     if (dims < CHUNK || dims % CHUNK != 0)
         return BAD_DIMS;
@@ -441,12 +441,12 @@ int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *pla
             return BAD_SIZE;
     const int64_t rounded = llround(sqrt((double)k));
     const int64_t group_count = rounded > 1 ? rounded : 1;
-    if (settings->probes < 1 || settings->probes > MAX_PROBES || settings->probes > group_count)
+    if (settings->probes < 1 || settings->probes > group_count)
         return BAD_PROBES;
     const int64_t width = (dims + CHUNK - 1) / CHUNK * CHUNK;
     const int copying = width != dims;
     const size_t table = (size_t)(k * width);
-    const int64_t batch = settings->batch;
+    const int64_t batch = settings->batch < n ? settings->batch : n;
     int64_t *order = identity(n);
     float *centroids = malloc(table * sizeof *centroids);
     float *usage = malloc((size_t)k * sizeof *usage);

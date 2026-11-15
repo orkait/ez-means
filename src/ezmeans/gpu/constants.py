@@ -20,5 +20,6 @@ EMA_ROWS = 32
 DIM_CHUNK = 64
 MIN_TILE = 16
 MAX_GROUP_SPAN = 512
-UNREACHABLE = tl.constexpr(2**31 - 1)
+INT32_MAX = 2**31 - 1
+UNREACHABLE = tl.constexpr(INT32_MAX)
 RELAXED = tl.constexpr("relaxed")

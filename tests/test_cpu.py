@@ -1,3 +1,4 @@
+import dataclasses
 import hashlib
 import os
 import subprocess
@@ -23,6 +24,8 @@ EPOCHS = 2
 PROBES = 4
 SEED = 0
 GROUPS = group_count(CLUSTERS)
+MANY_GROUPS = 80
+HUGE_BATCH = 2**62
 POISONED_ROW = 7
 OVERFLOW_SCALE = np.float32(1e20)
 TINY_EPOCHS = 1e-4
@@ -68,16 +71,16 @@ def fit(x: Matrix, init: Matrix | None = None, epochs: float = EPOCHS) -> Matrix
     return train(x, CLUSTERS, law_recipe(ROWS, CLUSTERS, epochs, SEED), PROBES, init=init)
 
 
-def search(x: Matrix, homes: Labels, probes: int = GROUPS) -> Labels:
+def search(x: Matrix, homes: Labels, probes: int = GROUPS, groups: int = GROUPS) -> Labels:
     centroids = np.ascontiguousarray(x[:CLUSTERS])
-    return native.assign(x, centroids[:GROUPS], centroids, homes, probes)
+    return native.assign(x, centroids[:groups], centroids, homes, probes)
 
 
-@pytest.mark.parametrize("occupied", [GROUPS, GROUPS - 1])
+@pytest.mark.parametrize(("groups", "occupied"), [(GROUPS, GROUPS), (GROUPS, GROUPS - 1), (MANY_GROUPS, MANY_GROUPS)])
 @pytest.mark.parametrize("dims", [16, 64, 128])
-def test_probing_every_occupied_group_is_brute_force(dims: int, occupied: int) -> None:
+def test_probing_every_occupied_group_is_brute_force(dims: int, groups: int, occupied: int) -> None:
     x = points(dims)
-    labels = search(x, round_robin() % occupied, occupied)
+    labels = search(x, np.arange(CLUSTERS, dtype=np.int64) % occupied, occupied, groups)
     wide, centers = x.astype(np.float64), x[:CLUSTERS].astype(np.float64)
     squared = (wide**2).sum(axis=1)[:, None] - 2.0 * wide @ centers.T + (centers**2).sum(axis=1)[None, :]
     assert np.array_equal(labels, squared.argmin(axis=1))
@@ -128,6 +131,13 @@ def test_zero_padding_does_not_change_centroids(dims: int) -> None:
     centroids = train(x, CLUSTERS, recipe, PROBES)
     reference = train(padded, CLUSTERS, recipe, PROBES)
     assert np.array_equal(centroids, reference[:, :dims])
+
+
+def test_a_batch_past_the_rows_is_one_batch_per_epoch() -> None:
+    x = points(DIMS)
+    recipe = law_recipe(ROWS, CLUSTERS, EPOCHS, SEED)
+    whole = train(x, CLUSTERS, dataclasses.replace(recipe, batch=ROWS), PROBES)
+    assert np.array_equal(whole, train(x, CLUSTERS, dataclasses.replace(recipe, batch=HUGE_BATCH), PROBES))
 
 
 def test_accumulate_matches_numpy_add_at() -> None:

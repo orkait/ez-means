@@ -49,8 +49,8 @@ The first call compiles `src/ezmeans/cpu/kernel.c` with `gcc` into `~/.cache/ezm
 |---|---|
 | `KernelError(NOT_FINITE)` | a row or centroid has no finite squared distance: a NaN, an infinity, or values large enough to overflow `float32` |
 | `KernelError(BAD_SIZE)` | `k` is below 1 or above the rows, `init` is not `k × d`, or the epochs cover no rows |
-| `KernelError(BAD_PROBES)` | `probes` is below 1, above the √k groups, or above 64 |
-| `RecipeError` (a `ValueError`) | a `Recipe` with `epochs <= 0` (`EPOCHS`) or `alpha0` outside (0, 1] (`STEP`), or `law_recipe` with `n < 1`, `k < 1` or `epochs <= 0` (`LAW_DOMAIN`) |
+| `KernelError(BAD_PROBES)` | `probes` is below 1 or above the √k groups |
+| `RecipeError` (a `ValueError`) | a `Recipe` with `epochs <= 0` (`EPOCHS`), `batch < 1` (`BATCH`) or `alpha0` outside (0, 1] (`STEP`), or `law_recipe` with `n < 1`, `k < 1` or `epochs <= 0` (`LAW_DOMAIN`) |
 
 ## ⚡ GPU
 

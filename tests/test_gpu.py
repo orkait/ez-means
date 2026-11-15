@@ -6,6 +6,7 @@ import torch
 
 from ezmeans import cpu, law_recipe
 from ezmeans.gpu import Fault, GpuInputError, GroupIndex, train
+from ezmeans.gpu.constants import INT32_MAX
 from ezmeans.recipe import group_count
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
@@ -38,6 +39,14 @@ def poisoned(value: float) -> torch.Tensor:
     return rows
 
 
+def overflowing_assign() -> torch.Tensor:
+    rows, centroids = sample(DIMS)
+    probes = group_count(CLUSTERS)
+    index = GroupIndex(CLUSTERS, DIMS, probes, SEED)
+    index.regroup(centroids)
+    return index.assign(rows[:1].expand(INT32_MAX // probes + 1, DIMS))
+
+
 def squared_error(rows: np.ndarray, centroids: np.ndarray) -> float:
     wide, centers = rows.astype(np.float64), centroids.astype(np.float64)
     squared = (wide**2).sum(axis=1)[:, None] - 2.0 * wide @ centers.T + (centers**2).sum(axis=1)[None, :]
@@ -49,7 +58,6 @@ def test_probing_every_group_is_brute_force(dims: int) -> None:
     rows, centroids = sample(dims)
     index = GroupIndex(CLUSTERS, dims, group_count(CLUSTERS), SEED)
     index.regroup(centroids)
-    index.refresh(centroids)
     labels = index.assign(rows)
     wide, rounded = rows.float(), centroids.to(torch.bfloat16).float()
     scores = (rounded**2).sum(1)[None, :] - 2.0 * (wide @ rounded.T)
@@ -92,8 +100,9 @@ def test_gpu_training_matches_cpu_quality() -> None:
             Fault.BAD_SIZE,
         ),
         (lambda: train(sample(DIMS)[0], CLUSTERS, law_recipe(ROWS, CLUSTERS, TINY_EPOCHS, SEED)), Fault.BAD_SIZE),
+        (overflowing_assign, Fault.TOO_MANY_PAIRS),
     ],
-    ids=["nan", "inf", "overflow", "float32 rows", "fewer rows than clusters", "empty plan"],
+    ids=["nan", "inf", "overflow", "float32 rows", "fewer rows than clusters", "empty plan", "pairs past int32"],
 )
 def test_bad_input_raises_gpu_input_error(call: Callable[[], object], fault: Fault) -> None:
     with pytest.raises(GpuInputError) as raised:
