@@ -40,7 +40,7 @@ def _select(
     live = offs < n
     groups = tl.arange(0, GP)
     dots = tl.zeros((BM, GP), tl.float32)
-    for base in tl.static_range(0, DP, DK):
+    for base in range(0, DP, DK):
         cols = base + tl.arange(0, DK)
         a = tl.load(
             rows + offs[:, None].to(tl.int64) * row_stride + cols[None, :],
@@ -119,7 +119,7 @@ def _member(
         lanes = first + tl.arange(0, BN)
         inside = lanes < hi
         dots = tl.zeros((BM, BN), tl.float32)
-        for base in tl.static_range(0, DP, DK):
+        for base in range(0, DP, DK):
             cols = base + tl.arange(0, DK)
             a = tl.load(
                 rows + point[:, None] * row_stride + cols[None, :], mask=live[:, None] & (cols[None, :] < D), other=0.0

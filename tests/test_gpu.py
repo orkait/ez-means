@@ -59,7 +59,7 @@ def squared_error(rows: np.ndarray, centroids: np.ndarray) -> float:
     return float(squared.min(axis=1).mean())
 
 
-@pytest.mark.parametrize("dims", [96, 100, 128, 256])
+@pytest.mark.parametrize("dims", [96, 100, 128, 256, 1024, 3072])
 def test_probing_every_group_is_brute_force(dims: int) -> None:
     rows, centroids = sample(dims)
     index = GroupIndex(CLUSTERS, dims, group_count(CLUSTERS), SEED)
