@@ -61,14 +61,14 @@ The paper's own 1M protocol uses its test rows and per-seed targets, with k=1638
 | SSNPP 1M | 1.40 epochs, 29.8 s | 1.42 epochs, 3.3 s | 9.0x (7.4-10.5) |
 | SPACEV 1M | 2.30 epochs, 30.1 s | 2.56 epochs, 2.8 s (8 probes) | 11.1x (8.9-15.8) |
 
-On GPU, `experiments/gpu.py` swaps faiss' brute-force assignment for two Triton kernels that do the grouped search, and keeps the rest of faiss' GPU e-means:
+On GPU, `ezmeans.gpu` swaps faiss' brute-force assignment for a grouped search in Triton kernels that never synchronize the host, and keeps the rest of faiss' GPU e-means:
 
 | Setting | faiss GPU e-means | ez-means GPU | Speedup |
 |---|---:|---:|---:|
-| DEEP / SSNPP / SPACEV 1M, k=16384, RTX 3060, 10 seeds | 0.46 / 0.71 / 0.58 s (Triton) | 0.16 / 0.29 / 0.27 s | 2.9x / 2.4x / 2.2x |
-| DEEP 10M, k=65536, RTX 3060, 3 seeds | 25.1 s (Triton) | 2.3 s (8 probes) | 11.2x |
-| DEEP 10M, k=65536, H100, 10 seeds | 2.30 s (CuTe; 0.63-5.38 s by seed) | 0.27 s (8 probes) | 10.0x paired, 2.3x against CuTe's best seed |
-| 1M, k=16384, H100, 10 seeds | 0.04 s (CuTe) | 0.09-0.10 s | 2-3x slower |
+| DEEP / SSNPP / SPACEV 1M, k=16384, RTX 3060, 10 seeds | 0.45 / 0.69 / 0.60 s (Triton) | 0.08 / 0.15 / 0.15 s | 5.8x / 4.8x / 4.0x |
+| DEEP 10M, k=65536, RTX 3060, 3 seeds | 24.4 s (Triton) | 1.6 s (8 probes) | 15.6x |
+| DEEP 10M, k=65536, H100, 10 seeds | 2.31 s (CuTe; 0.64-5.67 s by seed) | 0.18 s (8 probes) | 15.3x paired, 3.5x against CuTe's best seed |
+| 1M, k=16384, H100, 10 seeds | 0.03-0.04 s (CuTe) | 0.04 s | level (0.8-1.0x) |
 
 ## 📦 Installation
 
@@ -100,7 +100,9 @@ uv run pytest
 |---|---|
 | `race.py` | time to Lloyd-25 quality against faiss, scikit-learn and e-means |
 | `paper_cpu.py` | epoch crossings on the paper's 1M (and 10M) protocol |
-| `gpu.py` | the same protocol on GPU, faiss GPU e-means against ez-means' Triton kernels (`uv sync --group gpu`, CUDA) |
+| `gpu.py` | the same protocol on GPU, faiss GPU e-means against `ezmeans.gpu` (`uv sync --group gpu`, CUDA) |
+| `work.py` | distance work to reach the target, a hardware-free measure of the speedup |
+| `adaptive.py` | fixed against adaptive per-row probing on trained centroids |
 | `fused_time.py` | exact, grouped and ez-means wall time and distance work |
 | `approximate.py` | whether approximate assignment hurts Lloyd or e-means after training |
 | `adsampling.py` | ADSampling pruning with a fast Hadamard rotation |
@@ -120,10 +122,10 @@ uv run pytest
 | Limitation | Evidence |
 |---|---|
 | The race covers one dataset (SIFT1M) at one k | `results/RESULTS.md` sections 5, 7, 12 and 15 |
-| A fixed 4 probes is too few for SPACEV at k=16384, and k=65536 needs 16 | sections 10, 16 and 17 |
+| A fixed 4 probes is too few for SPACEV at k=16384, and k=65536 needs 8-16; adaptive per-row probing did not help | sections 10, 16, 17 and 19 |
 | The lead over e-means at the race target depends on the CPU: 6.9x on Zen 5, 4.7x on Zen 3, 3.3x on Broadwell | sections 7, 12 and 15 |
-| On an H100 at 1M, faiss' CuTe kernels are 2-3x faster than ez-means' GPU path | section 17 |
-| The GPU path lives in `experiments/gpu.py` and sets a private attribute of faiss' `TorchEmeans` to swap the assignment backend | section 17 |
+| On an H100 at 1M, ez-means' GPU path is only level with faiss' CuTe kernels | section 17 |
+| The GPU path sets a private attribute of faiss' `TorchEmeans` (faiss 1.16) to swap the assignment backend, and is not bit-deterministic run to run | section 17 |
 | Tested only on Linux x86-64 with gcc. ARM, macOS and Windows are untested | none yet |
 
 ## 🙏 Credits
