@@ -47,6 +47,7 @@ gpu_image = (
         "numpy==2.5.4",
         "faiss-cpu==1.16.0",
         "scipy==1.18.1",
+        "scikit-learn==1.9.1",
         "h5py==3.16.0",
         "torch==2.15.0",
         "triton==3.9.0",
@@ -115,10 +116,10 @@ def paper(dataset: str, arms: list[str]) -> str:
 
 
 @app.function(image=gpu_image, gpu=GPU_KIND, cpu=GPU_CORES, memory=GPU_MEMORY_MB, timeout=HOUR)
-def gpu(datasets: list[str], probes: list[str]) -> str:
+def gpu(datasets: list[str], probes: list[str], seeds: list[str]) -> str:
     paths = fetch(datasets)
     card = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True, check=True).stdout
-    command = [sys.executable, "gpu.py", "--bf16", "--datasets", *datasets, "--probes", *probes]
+    command = [sys.executable, "gpu.py", "--bf16", "--datasets", *datasets, "--probes", *probes, "--seeds", *seeds]
     return card + run(command, GPU_CORES, paths)
 
 
@@ -156,7 +157,7 @@ def main(job: str, dataset: str = "", arms: str = "") -> None:
         print(paper.remote(dataset, arms.split(",")))
         return
     if job == "gpu":
-        print(gpu.remote(dataset.split(","), arms.split(",")))
+        print(gpu.remote(dataset.split(","), arms.split(","), [str(seed) for seed in PAPER_SEEDS]))
         return
     jobs = {"race": race, "scale": scale, "machine": machine, "probe": probe}
     print(jobs[job].remote())

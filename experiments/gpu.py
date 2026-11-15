@@ -12,9 +12,10 @@ import triton.language as tl
 from faiss.contrib.e_means.e_means_torch import Emeans as TorchEmeans
 from faiss.contrib.e_means.torch_backend import TritonBackend, select_backend
 from paper_cpu import BUDGETS, CLUSTERS, PAPER_CROSSING, Arm, Fit, crossing, test_error
+from race import lloyd, mse
 
-from ezmeans.config import PAPER_BENCH_DIR, PAPER_TARGETS
-from ezmeans.dataset import Matrix
+from ezmeans.config import PAPER_BENCH_DIR, PAPER_TARGETS, SIFT_BASE, SIFT_LEARN
+from ezmeans.dataset import Matrix, read_fvecs
 from ezmeans.reference import CHECK_EVERY, GROUP_ITERATIONS, Recipe, law_recipe
 
 sys.path.insert(0, str(PAPER_BENCH_DIR))
@@ -30,6 +31,11 @@ AUTOMATIC = "auto"
 CURVE_SEED = 10
 CURVE_EPOCHS = (1.0, 1.5, 2.0, 3.0, 4.0, 6.0)
 CHUNK_ROWS = 8192
+SIFT_ROWS = 1_000_000
+SIFT_TEST_ROWS = 100_000
+SIFT_SEEDS = (0, 1)
+SIFT_BUDGETS = (2.0, 2.2, 2.4, 3.0)
+LLOYD_ITERATIONS = 25
 device = torch.device("cuda")
 
 Targets = dict[str, dict[str, float]]
@@ -82,6 +88,7 @@ def member_kernel(
     block_group,
     block_start,
     group_end,
+    group_size,
     out_value,
     out_id,
     width,
@@ -106,7 +113,7 @@ def member_kernel(
     best = tl.full((BM,), float("inf"), tl.float32)
     best_id = tl.zeros((BM,), tl.int32)
     base = g * width
-    for first in range(0, width, BN):
+    for first in range(0, tl.load(group_size + g), BN):
         lanes = base + first + tl.arange(0, BN)
         score = tl.load(norms + lanes)[None, :] - 2.0 * tl.dot(
             a, tl.load(members + lanes[None, :] * DP + cols[:, None])
@@ -147,6 +154,7 @@ class GroupedBackend(TritonBackend):
         owner = nearest(c, g)
         order = torch.argsort(owner)
         sizes = torch.bincount(owner, minlength=self.groups)
+        self.sizes = sizes.int()
         self.width = triton.cdiv(int(sizes.max()), BLOCK_N) * BLOCK_N
         slot = torch.arange(len(c), device=device) - (torch.cumsum(sizes, 0) - sizes)[owner[order]]
         self.ids = torch.zeros((self.groups, self.width), device=device, dtype=torch.int32)
@@ -222,6 +230,7 @@ class GroupedBackend(TritonBackend):
             block_group.int(),
             block_start.int(),
             ends.int(),
+            self.sizes,
             value,
             ident,
             self.width,
@@ -276,6 +285,34 @@ def curve(name: str, train: Matrix, test: Matrix, xg: torch.Tensor, arms: list[A
             )
 
 
+def warm(fit: Fit, train: Matrix, k: int, budgets: tuple[float, ...]) -> None:
+    for budget in budgets:
+        fit(train, law_recipe(len(train), k, budget, WARM_SEED), k)
+
+
+def sift(k: int, probes: list[int]) -> None:
+    train, test = read_fvecs(SIFT_BASE, SIFT_ROWS), read_fvecs(SIFT_LEARN, SIFT_TEST_ROWS)
+    reference = {seed: mse(test, lloyd(LLOYD_ITERATIONS)(train, k, seed)) for seed in SIFT_SEEDS}
+    xg = torch.from_numpy(train).to(device)
+    print("| arm | epochs | test MSE / Lloyd-25, per seed | GPU s, per seed |")
+    print("|---|---|---|---|", flush=True)
+    for p in probes:
+        fit = gpu_fit(xg, p)
+        warm(fit, train, k, SIFT_BUDGETS)
+        for epochs in SIFT_BUDGETS:
+            ratios, times = [], []
+            for seed in SIFT_SEEDS:
+                start = time.perf_counter()
+                centroids = fit(train, law_recipe(len(train), k, epochs, seed), k)
+                times.append(time.perf_counter() - start)
+                ratios.append(mse(test, centroids) / reference[seed])
+            print(
+                f"| {f'ez-means GPU p{p}' if p else 'faiss GPU e-means'} | {epochs:g} | "
+                f"{', '.join(f'{r:.4f}' for r in ratios)} | {', '.join(f'{t:.3f}' for t in times)} |",
+                flush=True,
+            )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--datasets", nargs="+", choices=sorted(CLUSTERS), default=["deep1b-1M"])
@@ -283,8 +320,12 @@ def main() -> None:
     parser.add_argument("--seeds", type=int, nargs="+", default=[10, 11, 12])
     parser.add_argument("--curve", action="store_true")
     parser.add_argument("--bf16", action="store_true")
+    parser.add_argument("--sift", type=int, metavar="K")
     options = parser.parse_args()
     torch.cuda.set_per_process_memory_fraction(VRAM_FRACTION)
+    if options.sift:
+        sift(options.sift, options.probes)
+        return
     targets = json.loads(PAPER_TARGETS.read_text())["table3"]
     if options.curve:
         print("| dataset | arm | epochs | test MSE / seed-10 target | GPU s | empty clusters |")
@@ -305,7 +346,7 @@ def main() -> None:
         baseline = f"faiss GPU e-means, {select_backend(xg, xg.dtype, k, xg.shape[1], AUTOMATIC).name}"
         arms = [Arm(f"ez-means GPU p{p}" if p else baseline, gpu_fit(xg, p)) for p in options.probes]
         for arm in arms:
-            arm.fit(train, law_recipe(len(train), k, BUDGETS[0], WARM_SEED), k)
+            warm(arm.fit, train, k, CURVE_EPOCHS if options.curve else BUDGETS)
         if options.curve:
             curve(name, train, test, xg, arms, float(targets[name]["per_seed"][str(CURVE_SEED)]["test_mse"]))
         else:

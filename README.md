@@ -65,10 +65,10 @@ On GPU, `experiments/gpu.py` swaps faiss' brute-force assignment for two Triton 
 
 | Setting | faiss GPU e-means | ez-means GPU | Speedup |
 |---|---:|---:|---:|
-| DEEP / SSNPP / SPACEV 1M, k=16384, RTX 3060, 10 seeds | 0.45 / 0.72 / 0.57 s (Triton) | 0.19 / 0.34 / 0.32 s | 2.5x / 2.1x / 1.8x |
-| DEEP 10M, k=65536, RTX 3060, 3 seeds | 25.0 s (Triton) | 3.4 s (8 probes) | 8.0x |
-| DEEP 10M, k=65536, H100, 3 seeds | 2.09 s (CuTe) | 0.29 s (8 probes) | 7.3x |
-| 1M, k=16384, H100, 3 seeds | 0.03-0.10 s (CuTe) | 0.08-0.12 s | level to 2.5x slower |
+| DEEP / SSNPP / SPACEV 1M, k=16384, RTX 3060, 10 seeds | 0.46 / 0.71 / 0.58 s (Triton) | 0.16 / 0.29 / 0.27 s | 2.9x / 2.4x / 2.2x |
+| DEEP 10M, k=65536, RTX 3060, 3 seeds | 25.1 s (Triton) | 2.3 s (8 probes) | 11.2x |
+| DEEP 10M, k=65536, H100, 10 seeds | 2.30 s (CuTe; 0.63-5.38 s by seed) | 0.27 s (8 probes) | 10.0x paired, 2.3x against CuTe's best seed |
+| 1M, k=16384, H100, 10 seeds | 0.04 s (CuTe) | 0.09-0.10 s | 2-3x slower |
 
 ## 📦 Installation
 
@@ -122,7 +122,7 @@ uv run pytest
 | The race covers one dataset (SIFT1M) at one k | `results/RESULTS.md` sections 5, 7, 12 and 15 |
 | A fixed 4 probes is too few for SPACEV at k=16384, and k=65536 needs 16 | sections 10, 16 and 17 |
 | The lead over e-means at the race target depends on the CPU: 6.9x on Zen 5, 4.7x on Zen 3, 3.3x on Broadwell | sections 7, 12 and 15 |
-| On an H100 at 1M, faiss' CuTe kernels are level with or faster than ez-means' GPU path | section 17 |
+| On an H100 at 1M, faiss' CuTe kernels are 2-3x faster than ez-means' GPU path | section 17 |
 | The GPU path lives in `experiments/gpu.py` and sets a private attribute of faiss' `TorchEmeans` to swap the assignment backend | section 17 |
 | Tested only on Linux x86-64 with gcc. ARM, macOS and Windows are untested | none yet |
 
