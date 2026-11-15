@@ -8,12 +8,17 @@ CHECK_EVERY = 5
 ALPHA_MIN_FACTOR = 0.1
 SPLIT_EPSILON = 1e-4
 GROUP_ITERATIONS = 10
-BATCH_LAW = (0.035134, 0.134749, 0.876473, 0.813344)
+BATCH_POWERS = (0.134749, 0.876473, 0.813344)
 STEP_LAW = (0.8244, -0.4617, 0.9003, -0.4498, -0.1057)
 MIN_ALPHA0 = 1e-4
 MAX_ALPHA0 = 1.0
 MIN_PROBES = 4
 GROUPS_PER_PROBE = 16
+
+
+class BatchLaw(Enum):
+    THROUGHPUT = 0.035134
+    QUALITY = 0.00439175
 
 
 class RecipeFault(Enum):
@@ -71,12 +76,17 @@ def nearest_power_of_two(value: float) -> int:
     return low if value / low < high / value else high
 
 
-def law_recipe(n: int, k: int, epochs: float, seed: int) -> Recipe:
+def law_recipe(n: int, k: int, epochs: float, seed: int, law: BatchLaw = BatchLaw.THROUGHPUT) -> Recipe:
     if n < 1 or k < 1 or not epochs > 0:
         raise RecipeError(RecipeFault.LAW_DOMAIN)
-    rate, k_power, n_power, epochs_power = BATCH_LAW
-    law_batch = nearest_power_of_two(rate * k**k_power * n**n_power * epochs**epochs_power)
-    batch = max(1, min(law_batch, nearest_power_of_two(n / 2), n))
+    k_power, n_power, epochs_power = BATCH_POWERS
+    law_batch = nearest_power_of_two(law.value * k**k_power * n**n_power * epochs**epochs_power)
+    match law:
+        case BatchLaw.THROUGHPUT:
+            cap = nearest_power_of_two(n / 2)
+        case BatchLaw.QUALITY:
+            cap = n // 2
+    batch = max(1, min(law_batch, cap, n))
     step, k_power, batch_power, n_power, epochs_power = STEP_LAW
     alpha0 = step * k**k_power * batch**batch_power * n**n_power * epochs**epochs_power
     return Recipe(epochs, batch, min(max(alpha0, MIN_ALPHA0), MAX_ALPHA0), REVIVAL_THRESHOLD, seed)

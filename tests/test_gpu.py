@@ -39,6 +39,12 @@ def poisoned(value: float) -> torch.Tensor:
     return rows
 
 
+def poisoned_start() -> torch.Tensor:
+    _, start = sample(DIMS)
+    start[POISONED_ROW] = float("nan")
+    return start
+
+
 def overflowing_assign() -> torch.Tensor:
     rows, centroids = sample(DIMS)
     probes = group_count(CLUSTERS)
@@ -79,12 +85,12 @@ def test_index_never_synchronizes_the_host() -> None:
         torch.cuda.set_sync_debug_mode(SYNC_DEFAULT)
 
 
-def test_gpu_training_matches_cpu_quality() -> None:
-    rows, _ = sample(DIMS)
+def test_gpu_training_from_a_shared_start_matches_cpu_quality() -> None:
+    rows, start = sample(DIMS)
     recipe = law_recipe(ROWS, CLUSTERS, EPOCHS, SEED)
     data = rows.float().cpu().numpy()
-    gpu = squared_error(data, train(rows, CLUSTERS, recipe, PROBES).cpu().numpy())
-    reference = squared_error(data, cpu.train(data, CLUSTERS, recipe, PROBES))
+    gpu = squared_error(data, train(rows, CLUSTERS, recipe, PROBES, init=start).cpu().numpy())
+    reference = squared_error(data, cpu.train(data, CLUSTERS, recipe, PROBES, init=start.cpu().numpy()))
     assert gpu <= reference * (1 + QUALITY_TOLERANCE)
 
 
@@ -101,8 +107,28 @@ def test_gpu_training_matches_cpu_quality() -> None:
         ),
         (lambda: train(sample(DIMS)[0], CLUSTERS, law_recipe(ROWS, CLUSTERS, TINY_EPOCHS, SEED)), Fault.BAD_SIZE),
         (overflowing_assign, Fault.TOO_MANY_PAIRS),
+        (
+            lambda: train(sample(DIMS)[0], CLUSTERS, law_recipe(ROWS, CLUSTERS, EPOCHS, SEED), init=poisoned_start()),
+            Fault.NOT_FINITE,
+        ),
+        (
+            lambda: train(
+                sample(DIMS)[0], CLUSTERS, law_recipe(ROWS, CLUSTERS, EPOCHS, SEED), init=sample(DIMS + 1)[1]
+            ),
+            Fault.WRONG_SHAPE,
+        ),
     ],
-    ids=["nan", "inf", "overflow", "float32 rows", "fewer rows than clusters", "empty plan", "pairs past int32"],
+    ids=[
+        "nan",
+        "inf",
+        "overflow",
+        "float32 rows",
+        "fewer rows than clusters",
+        "empty plan",
+        "pairs past int32",
+        "nan start",
+        "start wider than rows",
+    ],
 )
 def test_bad_input_raises_gpu_input_error(call: Callable[[], object], fault: Fault) -> None:
     with pytest.raises(GpuInputError) as raised:

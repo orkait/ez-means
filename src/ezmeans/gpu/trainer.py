@@ -31,17 +31,31 @@ def revive(centroids: torch.Tensor, usage: torch.Tensor, recipe: Recipe, generat
     usage[targets] = usage[sources]
 
 
-def train(x: torch.Tensor, k: int, recipe: Recipe, probes: int | None = None) -> torch.Tensor:
+def bounded(rows: torch.Tensor) -> bool:
+    return bool(torch.linalg.vector_norm(rows, dim=1, dtype=torch.float32).max() < MAX_ROW_NORM)
+
+
+def train(
+    x: torch.Tensor, k: int, recipe: Recipe, probes: int | None = None, init: torch.Tensor | None = None
+) -> torch.Tensor:
     index = GroupIndex(k, x.shape[-1], default_probes(k) if probes is None else probes, recipe.seed, x.device)
     index.check(x, torch.bfloat16, None)
     n = len(x)
     plan = epoch_rows(n, recipe.epochs)
     if not 1 <= k <= n or min(plan) < 1:
         raise GpuInputError(Fault.BAD_SIZE)
-    if not bool(torch.linalg.vector_norm(x, dim=1, dtype=torch.float32).max() < MAX_ROW_NORM):
+    if not bounded(x):
         raise GpuInputError(Fault.NOT_FINITE)
     generator = torch.Generator(index.device).manual_seed(recipe.seed)
-    centroids = x[torch.randperm(n, generator=generator, device=index.device)[:k]].float()
+    if init is None:
+        centroids = x[torch.randperm(n, generator=generator, device=index.device)[:k]].float()
+    else:
+        index.check(init, torch.float32, k)
+        if init.shape[1] != index.dims:
+            raise GpuInputError(Fault.WRONG_SHAPE)
+        if not bounded(init):
+            raise GpuInputError(Fault.NOT_FINITE)
+        centroids = init.clone(memory_format=torch.contiguous_format)
     usage = torch.full((k,), INIT_USAGE, device=index.device)
     sums, counts = torch.zeros_like(centroids), torch.zeros_like(usage)
     pass_sums, pass_counts = torch.zeros_like(centroids), torch.zeros_like(usage)

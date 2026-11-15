@@ -39,7 +39,7 @@ centroids = train(x, 1024, law_recipe(len(x), 1024, 2, 0))
 
 | Call | Returns |
 |---|---|
-| `ezmeans.law_recipe(n, k, epochs, seed)` | the batch size and step size from the e-means scaling law |
+| `ezmeans.law_recipe(n, k, epochs, seed, law=BatchLaw.THROUGHPUT)` | the batch size and step size from the e-means scaling law; `BatchLaw.QUALITY` is the batch eight times smaller that the e-means paper uses above 2M rows |
 | `ezmeans.cpu.train(x, k, recipe, probes=None, init=None)` | the `k × d` centroids; `init` is an optional `k × d` start |
 | `ezmeans.default_probes(k)` | the probes used when `probes` is `None`: 1/16 of the √k groups, at least 4 (4 at k=4096, 8 at 16384, 16 at 65536) |
 
@@ -67,7 +67,7 @@ x = torch.randn(1_000_000, 96, device="cuda").to(torch.bfloat16)
 centroids = train(x, 16384, law_recipe(len(x), 16384, 2, 0))
 ```
 
-`ezmeans.gpu` runs the same e-means loop as the CPU path (EMA update, mass revival, cosine step, last-epoch mean). The grouped search, the batch sums and the EMA update are Triton kernels that never synchronize the host; the loop synchronizes once per revival check. `x` is a CUDA `bfloat16` tensor; distances accumulate in `float32`. Rows that are not finite, or whose norm passes about 9.2e18 (half the square root of the `float32` maximum, where squared distances could overflow), raise `GpuInputError(NOT_FINITE)`.
+`ezmeans.gpu` runs the same e-means loop as the CPU path (EMA update, mass revival, cosine step, last-epoch mean). The grouped search, the batch sums and the EMA update are Triton kernels that never synchronize the host; the loop synchronizes once per revival check. `x` is a CUDA `bfloat16` tensor; distances accumulate in `float32`. `train(x, k, recipe, probes=None, init=None)` takes an optional `k × d` CUDA `float32` start, as the CPU path does. Rows that are not finite, or whose norm passes about 9.2e18 (half the square root of the `float32` maximum, where squared distances could overflow), raise `GpuInputError(NOT_FINITE)`.
 
 ## 📦 Installation
 

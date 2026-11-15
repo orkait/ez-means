@@ -3,13 +3,12 @@ from collections.abc import Callable
 
 import pytest
 
-from ezmeans.recipe import RecipeError, RecipeFault, default_probes, law_recipe
+from ezmeans.recipe import BatchLaw, RecipeError, RecipeFault, default_probes, law_recipe
 
 ROWS = 4096
 CLUSTERS = 256
 EPOCHS = 2
 SEED = 0
-BATCH_LAW = "throughput"
 
 
 @pytest.mark.parametrize(
@@ -43,14 +42,22 @@ def test_recipe_rejects_impossible_values(call: Callable[[], object], fault: Rec
     assert raised.value.fault is fault
 
 
+@pytest.mark.parametrize("law", list(BatchLaw))
 @pytest.mark.parametrize(
     ("n", "k", "epochs"),
-    [(2_176, 40, 25), (5_000, 4_096, 0.6), (100_000, 1_024, 2), (1_000_000, 16_384, 1.4), (10_000_000, 65_536, 2.2)],
+    [
+        (100, 2, 1_000),
+        (2_176, 40, 25),
+        (5_000, 4_096, 0.6),
+        (100_000, 1_024, 2),
+        (1_000_000, 16_384, 1.4),
+        (10_000_000, 65_536, 2.2),
+    ],
 )
-def test_law_matches_faiss(n: int, k: int, epochs: float) -> None:
+def test_law_matches_faiss(n: int, k: int, epochs: float, law: BatchLaw) -> None:
     base = pytest.importorskip("faiss.contrib.e_means.base")
-    recipe = law_recipe(n, k, epochs, SEED)
-    assert (recipe.batch, recipe.alpha0) == base._resolve_recipe(n, k, epochs, BATCH_LAW, None, None)
+    recipe = law_recipe(n, k, epochs, SEED, law)
+    assert (recipe.batch, recipe.alpha0) == base._resolve_recipe(n, k, epochs, law.name.lower(), None, None)
 
 
 @pytest.mark.parametrize(
