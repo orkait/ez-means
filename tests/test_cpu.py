@@ -8,11 +8,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from ezmeans import kernel
-from ezmeans.config import KERNEL_COMPILE, KERNEL_SOURCE
-from ezmeans.kernel import KernelError, KernelStatus, Labels, Matrix
-from ezmeans.recipe import group_count, law_recipe
-from ezmeans.trainer import ez_means
+from ezmeans import law_recipe
+from ezmeans.config import KERNEL_COMPILE
+from ezmeans.cpu import KernelError, KernelStatus, native, train
+from ezmeans.cpu.build import KERNEL_SOURCE
+from ezmeans.cpu.native import Labels, Matrix
+from ezmeans.recipe import group_count
 
 ROWS = 4096
 CLUSTERS = 256
@@ -29,10 +30,10 @@ THREAD_COUNTS = ("1", "4")
 TRAIN_SCRIPT = f"""
 import hashlib, sys
 import numpy as np
-from ezmeans.recipe import law_recipe
-from ezmeans.trainer import ez_means
+from ezmeans import law_recipe
+from ezmeans.cpu import train
 x = np.random.default_rng({SEED}).standard_normal(({ROWS}, {DIMS})).astype(np.float32)
-centroids = ez_means(x, {CLUSTERS}, law_recipe(len(x), {CLUSTERS}, {EPOCHS}, {SEED}), {PROBES})
+centroids = train(x, {CLUSTERS}, law_recipe(len(x), {CLUSTERS}, {EPOCHS}, {SEED}), {PROBES})
 sys.stdout.write(hashlib.sha256(centroids.tobytes()).hexdigest())
 """
 BLOCK_FAISS = 'import sys\nsys.modules["faiss"] = None\n'
@@ -64,12 +65,12 @@ def round_robin() -> Labels:
 
 
 def fit(x: Matrix, init: Matrix | None = None, epochs: float = EPOCHS) -> Matrix:
-    return ez_means(x, CLUSTERS, law_recipe(ROWS, CLUSTERS, epochs, SEED), PROBES, init=init)
+    return train(x, CLUSTERS, law_recipe(ROWS, CLUSTERS, epochs, SEED), PROBES, init=init)
 
 
 def search(x: Matrix, homes: Labels, probes: int = GROUPS) -> Labels:
     centroids = np.ascontiguousarray(x[:CLUSTERS])
-    return kernel.assign(x, centroids[:GROUPS], centroids, homes, probes)
+    return native.assign(x, centroids[:GROUPS], centroids, homes, probes)
 
 
 @pytest.mark.parametrize("occupied", [GROUPS, GROUPS - 1])
@@ -95,7 +96,7 @@ def test_probing_every_occupied_group_is_brute_force(dims: int, occupied: int) -
         (lambda: search(poisoned(np.nan), round_robin()), KernelStatus.NOT_FINITE),
         (lambda: search(points(DIMS), round_robin() + GROUPS), KernelStatus.BAD_LABEL),
         (lambda: search(points(DIMS), round_robin()[1:]), KernelStatus.BAD_SIZE),
-        (lambda: kernel.accumulate(points(DIMS), round_robin(), CLUSTERS), KernelStatus.BAD_SIZE),
+        (lambda: native.accumulate(points(DIMS), round_robin(), CLUSTERS), KernelStatus.BAD_SIZE),
     ],
     ids=[
         "nan row",
@@ -124,15 +125,15 @@ def test_zero_padding_does_not_change_centroids(dims: int) -> None:
     padded = np.zeros((ROWS, width), dtype=np.float32)
     padded[:, :dims] = x
     recipe = law_recipe(ROWS, CLUSTERS, EPOCHS, SEED)
-    centroids = ez_means(x, CLUSTERS, recipe, PROBES)
-    reference = ez_means(padded, CLUSTERS, recipe, PROBES)
+    centroids = train(x, CLUSTERS, recipe, PROBES)
+    reference = train(padded, CLUSTERS, recipe, PROBES)
     assert np.array_equal(centroids, reference[:, :dims])
 
 
 def test_accumulate_matches_numpy_add_at() -> None:
     x = points(DIMS)
     labels = np.random.default_rng(SEED).integers(0, CLUSTERS, ROWS)
-    sums, counts = kernel.accumulate(x, labels, CLUSTERS)
+    sums, counts = native.accumulate(x, labels, CLUSTERS)
     expected = np.zeros((CLUSTERS, DIMS), dtype=np.float32)
     np.add.at(expected, labels, x)
     assert np.array_equal(sums, expected)

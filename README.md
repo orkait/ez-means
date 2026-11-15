@@ -30,20 +30,20 @@ uv sync
 
 ```python
 import numpy as np
-from ezmeans.recipe import law_recipe
-from ezmeans.trainer import ez_means
+from ezmeans import law_recipe
+from ezmeans.cpu import train
 
 x = np.random.default_rng(0).standard_normal((100_000, 128)).astype(np.float32)
-centroids = ez_means(x, 1024, law_recipe(len(x), 1024, 2, 0))
+centroids = train(x, 1024, law_recipe(len(x), 1024, 2, 0))
 ```
 
 | Call | Returns |
 |---|---|
-| `law_recipe(n, k, epochs, seed)` | the batch size and step size from the e-means scaling law |
-| `ez_means(x, k, recipe, probes=None, init=None)` | the `k × d` centroids; `init` is an optional `k × d` start |
-| `default_probes(k)` | the probes used when `probes` is `None`: 1/16 of the √k groups, at least 4 (4 at k=4096, 8 at 16384, 16 at 65536) |
+| `ezmeans.law_recipe(n, k, epochs, seed)` | the batch size and step size from the e-means scaling law |
+| `ezmeans.cpu.train(x, k, recipe, probes=None, init=None)` | the `k × d` centroids; `init` is an optional `k × d` start |
+| `ezmeans.default_probes(k)` | the probes used when `probes` is `None`: 1/16 of the √k groups, at least 4 (4 at k=4096, 8 at 16384, 16 at 65536) |
 
-The first call compiles `src/ezmeans/kernel.c` with `gcc` into `~/.cache/ezmeans/`. Fewer probes is faster and can miss a point's nearest centroid; probing every group is exact.
+The first call compiles `src/ezmeans/cpu/kernel.c` with `gcc` into `~/.cache/ezmeans/`. Fewer probes is faster and can miss a point's nearest centroid; probing every group is exact.
 
 | Error | Raised when |
 |---|---|
@@ -60,8 +60,8 @@ uv sync --extra gpu
 
 ```python
 import torch
-from ezmeans.gpu.trainer import train
-from ezmeans.recipe import law_recipe
+from ezmeans import law_recipe
+from ezmeans.gpu import train
 
 x = torch.randn(1_000_000, 96, device="cuda").to(torch.bfloat16)
 centroids = train(x, 16384, law_recipe(len(x), 16384, 2, 0))
@@ -90,13 +90,21 @@ uv run ruff check . && uv run ruff format --check .
 uv run mypy src tests
 ```
 
+| Path | Holds |
+|---|---|
+| `src/ezmeans/recipe.py` | the recipe both backends train with: scaling laws, epoch plan, default probes, `RecipeError` |
+| `src/ezmeans/config.py` | the one config: cache directory and gcc flags |
+| `src/ezmeans/cpu/` | `kernel.c` (C11 + OpenMP), `build.py` (hash-keyed gcc build), `native.py` (ctypes binding and input checks), `trainer.py` |
+| `src/ezmeans/gpu/` | `kernels.py` (Triton), `index.py` (`GroupIndex`), `trainer.py` (the e-means loop), `constants.py` |
+| `tests/` | `test_recipe.py`, `test_cpu.py`, `test_gpu.py` |
+
 `tests/test_gpu.py` runs only where `torch` and `triton` are installed and a CUDA device is present. The tests that hold the vendored scaling law equal to faiss run only where faiss is installed, as it is in the `dev` group.
 
 ## ⚠️ Limitations
 
 | Limitation | Where |
 |---|---|
-| Both paths assign by Euclidean distance only | `src/ezmeans/kernel.c`, `src/ezmeans/gpu/kernels.py` |
+| Both paths assign by Euclidean distance only | `src/ezmeans/cpu/kernel.c`, `src/ezmeans/gpu/kernels.py` |
 | GPU results are not bit-identical run to run: the kernels and the batch sums accumulate with float atomics | `src/ezmeans/gpu/kernels.py`, `src/ezmeans/gpu/trainer.py` |
 | Tested only on Linux x86-64 with gcc; ARM, macOS and Windows are untested | none yet |
 

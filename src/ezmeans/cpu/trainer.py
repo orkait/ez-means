@@ -1,5 +1,5 @@
-from ezmeans import kernel
-from ezmeans.kernel import Matrix
+from ezmeans.cpu import native
+from ezmeans.cpu.native import Matrix
 from ezmeans.recipe import (
     ALPHA_MIN_FACTOR,
     CHECK_EVERY,
@@ -12,8 +12,8 @@ from ezmeans.recipe import (
 )
 
 
-def ez_means(x: Matrix, k: int, recipe: Recipe, probes: int | None = None, init: Matrix | None = None) -> Matrix:
-    settings = kernel.Settings(
+def train(x: Matrix, k: int, recipe: Recipe, probes: int | None = None, init: Matrix | None = None) -> Matrix:
+    settings = native.Settings(
         batch=recipe.batch,
         probes=default_probes(k) if probes is None else probes,
         check_every=CHECK_EVERY,
@@ -25,4 +25,4 @@ def ez_means(x: Matrix, k: int, recipe: Recipe, probes: int | None = None, init:
         init_usage=INIT_USAGE,
         split_epsilon=SPLIT_EPSILON,
     )
-    return kernel.train(x, k, epoch_rows(len(x), recipe.epochs), settings, init)
+    return native.train(x, k, epoch_rows(len(x), recipe.epochs), settings, init)

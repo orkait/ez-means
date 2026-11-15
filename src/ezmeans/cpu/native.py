@@ -1,16 +1,11 @@
 import ctypes
 import functools
-import hashlib
-import os
-import subprocess
-import tempfile
 from enum import IntEnum
-from pathlib import Path
 
 import numpy as np
 import numpy.typing as npt
 
-from ezmeans.config import CACHE, KERNEL_COMPILE, KERNEL_SOURCE
+from ezmeans.cpu.build import build
 
 Matrix = npt.NDArray[np.float32]
 Labels = npt.NDArray[np.int64]
@@ -18,10 +13,6 @@ Labels = npt.NDArray[np.int64]
 FLOATS = np.ctypeslib.ndpointer(np.float32, flags="C_CONTIGUOUS")
 INDICES = np.ctypeslib.ndpointer(np.int64, flags="C_CONTIGUOUS")
 SIZE = ctypes.c_int64
-LIBRARY_STEM = "libkernel"
-LIBRARY_SUFFIX = ".so"
-KEY_LENGTH = 16
-TARGET_QUERY = ("-Q", "--help=target")
 
 
 class KernelStatus(IntEnum):
@@ -38,28 +29,6 @@ class KernelError(RuntimeError):
     def __init__(self, status: KernelStatus) -> None:
         super().__init__(f"kernel failed: {status.name}")
         self.status = status
-
-
-def build_key() -> str:
-    target = subprocess.run([*KERNEL_COMPILE, *TARGET_QUERY], capture_output=True, text=True, check=True).stdout
-    digest = hashlib.sha256(KERNEL_SOURCE.read_bytes())
-    digest.update("\0".join(KERNEL_COMPILE).encode())
-    digest.update(target.encode())
-    return digest.hexdigest()[:KEY_LENGTH]
-
-
-def build() -> Path:
-    path = CACHE / f"{LIBRARY_STEM}-{build_key()}{LIBRARY_SUFFIX}"
-    if not path.exists():
-        CACHE.mkdir(parents=True, exist_ok=True)
-        handle, temporary = tempfile.mkstemp(dir=CACHE, suffix=LIBRARY_SUFFIX)
-        os.close(handle)
-        try:
-            subprocess.run([*KERNEL_COMPILE, str(KERNEL_SOURCE), "-o", temporary], check=True)
-            Path(temporary).replace(path)
-        finally:
-            Path(temporary).unlink(missing_ok=True)
-    return path
 
 
 @functools.cache

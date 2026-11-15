@@ -4,10 +4,9 @@ import numpy as np
 import pytest
 import torch
 
-from ezmeans.gpu.index import Fault, GpuInputError, GroupIndex
-from ezmeans.gpu.trainer import train
-from ezmeans.recipe import group_count, law_recipe
-from ezmeans.trainer import ez_means
+from ezmeans import cpu, law_recipe
+from ezmeans.gpu import Fault, GpuInputError, GroupIndex, train
+from ezmeans.recipe import group_count
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
 
@@ -77,8 +76,8 @@ def test_gpu_training_matches_cpu_quality() -> None:
     recipe = law_recipe(ROWS, CLUSTERS, EPOCHS, SEED)
     data = rows.float().cpu().numpy()
     gpu = squared_error(data, train(rows, CLUSTERS, recipe, PROBES).cpu().numpy())
-    cpu = squared_error(data, ez_means(data, CLUSTERS, recipe, PROBES))
-    assert gpu <= cpu * (1 + QUALITY_TOLERANCE)
+    reference = squared_error(data, cpu.train(data, CLUSTERS, recipe, PROBES))
+    assert gpu <= reference * (1 + QUALITY_TOLERANCE)
 
 
 @pytest.mark.parametrize(
