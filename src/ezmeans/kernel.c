@@ -453,21 +453,13 @@ int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *pla
     int64_t *homes = malloc((size_t)k * sizeof *homes);
     int64_t *cell_order = malloc((size_t)k * sizeof *cell_order);
     int64_t *offsets = malloc((size_t)(group_count + 1) * sizeof *offsets);
-    float *working = copying ? malloc((size_t)n * (size_t)width * sizeof *working) : NULL;
+    float *padded = copying ? calloc((size_t)batch * (size_t)width, sizeof *padded) : NULL;
+    int64_t *local = copying ? identity(batch) : NULL;
     Tiles group_tiles = {0}, cell_tiles = {0};
     int status = order && centroids && usage && sums && counts && pass_sums && pass_counts && best && labels && groups && homes &&
-                         cell_order && offsets && (!copying || working)
+                         cell_order && offsets && (!copying || (padded && local))
                      ? DONE
                      : NO_MEMORY;
-    if (status == DONE && copying) {
-#pragma omp parallel for schedule(static)
-        for (int64_t r = 0; r < n; r++) {
-            float *row = working + r * width;
-            memcpy(row, x + r * dims, (size_t)dims * sizeof *row);
-            memset(row + dims, 0, (size_t)(width - dims) * sizeof *row);
-        }
-    }
-    const float *data = copying ? working : x;
     uint64_t state = settings->seed;
     uint64_t revival = next(&state);
     int64_t steps = 0, step = 0, searches = 0;
@@ -476,12 +468,9 @@ int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *pla
         permute(order, n, &state);
         for (int64_t c = 0; c < k; c++) {
             float *centroid = centroids + c * width;
-            if (init_count) {
-                memcpy(centroid, init + c * dims, (size_t)dims * sizeof *centroid);
-                memset(centroid + dims, 0, (size_t)(width - dims) * sizeof *centroid);
-            } else {
-                memcpy(centroid, data + order[c] * width, (size_t)width * sizeof *centroid);
-            }
+            const float *source = init_count ? init + c * dims : x + order[c] * dims;
+            memcpy(centroid, source, (size_t)dims * sizeof *centroid);
+            memset(centroid + dims, 0, (size_t)(width - dims) * sizeof *centroid);
             usage[c] = (float)settings->init_usage;
         }
         for (int64_t e = 0; e < epochs; e++)
@@ -493,6 +482,14 @@ int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *pla
         for (int64_t begin = 0; status == DONE && begin < plan[e]; begin += batch) {
             const int64_t count = plan[e] - begin < batch ? plan[e] - begin : batch;
             const int64_t *index = order + begin;
+            const float *rows = x;
+            if (copying) {
+#pragma omp parallel for schedule(static)
+                for (int64_t r = 0; r < count; r++)
+                    memcpy(padded + r * width, x + index[r] * dims, (size_t)dims * sizeof *padded);
+                rows = padded;
+                index = local;
+            }
             if (searches % settings->check_every == 0) {
                 release(&group_tiles);
                 status = regroup(centroids, k, width, settings, groups, group_count, homes, cell_order, offsets, work);
@@ -503,9 +500,9 @@ int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *pla
             if (status == DONE)
                 status = tile(centroids, cell_order, offsets, group_count, width, &cell_tiles);
             if (status == DONE)
-                *work += label_rows(data, index, count, width, &group_tiles, &cell_tiles, settings->probes, best, labels);
+                *work += label_rows(rows, index, count, width, &group_tiles, &cell_tiles, settings->probes, best, labels);
             if (status == DONE)
-                status = sum_rows(data, index, count, width, labels, k, sums, counts);
+                status = sum_rows(rows, index, count, width, labels, k, sums, counts);
             release(&cell_tiles);
             if (status != DONE)
                 break;
@@ -530,7 +527,8 @@ int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *pla
         }
     }
     release(&group_tiles);
-    free(working);
+    free(padded);
+    free(local);
     free(order);
     free(centroids);
     free(usage);

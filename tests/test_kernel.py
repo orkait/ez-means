@@ -59,8 +59,9 @@ def test_zero_padding_does_not_change_centroids(dims: int) -> None:
 
 def test_init_must_have_one_row_per_cluster() -> None:
     x = points(32)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(kernel.KernelError) as raised:
         ez_means(x, CLUSTERS, law_recipe(ROWS, CLUSTERS, 1, SEED), PROBES, init=x[: CLUSTERS - 1])
+    assert raised.value.status is kernel.KernelStatus.BAD_SIZE
 
 
 def test_accumulate_matches_numpy_add_at() -> None:

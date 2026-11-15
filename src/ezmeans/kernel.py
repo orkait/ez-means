@@ -1,27 +1,69 @@
 import ctypes
 import functools
+import hashlib
+import os
 import subprocess
+import tempfile
+from enum import IntEnum
+from pathlib import Path
 
 import numpy as np
 import numpy.typing as npt
 
-from ezmeans.config import KERNEL_COMPILE, KERNEL_LIBRARY, KERNEL_SOURCE
+from ezmeans.config import CACHE, KERNEL_COMPILE, KERNEL_SOURCE
 
 Matrix = npt.NDArray[np.float32]
 Labels = npt.NDArray[np.int64]
 
-DONE = 0
 FLOATS = np.ctypeslib.ndpointer(np.float32, flags="C_CONTIGUOUS")
 INDICES = np.ctypeslib.ndpointer(np.int64, flags="C_CONTIGUOUS")
 SIZE = ctypes.c_int64
+LIBRARY_STEM = "libkernel"
+LIBRARY_SUFFIX = ".so"
+KEY_LENGTH = 16
+TARGET_QUERY = ("-Q", "--help=target")
+
+
+class KernelStatus(IntEnum):
+    DONE = 0
+    BAD_PROBES = 1
+    NO_MEMORY = 2
+    BAD_LABEL = 3
+    BAD_DIMS = 4
+    BAD_SIZE = 5
+
+
+class KernelError(RuntimeError):
+    def __init__(self, status: KernelStatus) -> None:
+        super().__init__(f"kernel failed: {status.name}")
+        self.status = status
+
+
+def build_key() -> str:
+    target = subprocess.run([*KERNEL_COMPILE, *TARGET_QUERY], capture_output=True, text=True, check=True).stdout
+    digest = hashlib.sha256(KERNEL_SOURCE.read_bytes())
+    digest.update("\0".join(KERNEL_COMPILE).encode())
+    digest.update(target.encode())
+    return digest.hexdigest()[:KEY_LENGTH]
+
+
+def build() -> Path:
+    path = CACHE / f"{LIBRARY_STEM}-{build_key()}{LIBRARY_SUFFIX}"
+    if not path.exists():
+        CACHE.mkdir(parents=True, exist_ok=True)
+        handle, temporary = tempfile.mkstemp(dir=CACHE, suffix=LIBRARY_SUFFIX)
+        os.close(handle)
+        try:
+            subprocess.run([*KERNEL_COMPILE, str(KERNEL_SOURCE), "-o", temporary], check=True)
+            os.replace(temporary, path)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+    return path
 
 
 @functools.cache
 def library() -> ctypes.CDLL:
-    if not KERNEL_LIBRARY.exists() or KERNEL_LIBRARY.stat().st_mtime < KERNEL_SOURCE.stat().st_mtime:
-        KERNEL_LIBRARY.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run([*KERNEL_COMPILE, str(KERNEL_SOURCE), "-o", str(KERNEL_LIBRARY)], check=True)
-    loaded = ctypes.CDLL(str(KERNEL_LIBRARY))
+    loaded = ctypes.CDLL(str(build()))
     loaded.assign.argtypes = [
         FLOATS,
         SIZE,
@@ -71,8 +113,9 @@ class Settings(ctypes.Structure):
 
 
 def check(status: int) -> None:
-    if status != DONE:
-        raise RuntimeError(f"kernel failed with status {status}")
+    code = KernelStatus(status)
+    if code is not KernelStatus.DONE:
+        raise KernelError(code)
 
 
 def assign(
