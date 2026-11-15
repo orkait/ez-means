@@ -20,6 +20,12 @@ class Recipe:
     tau: float
     seed: int
 
+    def __post_init__(self) -> None:
+        if not self.epochs > 0:
+            raise ValueError(f"epochs must be positive, got {self.epochs}")
+        if not 0 < self.alpha0 <= 1:
+            raise ValueError(f"alpha0 must be in (0, 1], got {self.alpha0}")
+
 
 def group_count(k: int) -> int:
     return max(1, round(math.sqrt(k)))

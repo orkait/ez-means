@@ -1,8 +1,9 @@
 import pytest
 import torch
 
-from ezmeans.gpu.index import GroupIndex
-from ezmeans.recipe import group_count
+from ezmeans.gpu.backend import emeans, train
+from ezmeans.gpu.index import Fault, GpuInputError, GroupIndex
+from ezmeans.recipe import group_count, law_recipe
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
 
@@ -10,6 +11,9 @@ ROWS = 20_000
 CLUSTERS = 1024
 PROBES = 4
 SEED = 0
+EPOCHS = 1
+QUALITY_LAW_DIMS = 8
+POISONED_ROW = 7
 SYNC_ERROR = "error"
 SYNC_DEFAULT = "default"
 SCORE_TOLERANCE = 1e-5
@@ -49,3 +53,19 @@ def test_index_never_synchronizes_the_host() -> None:
         index.assign(rows)
     finally:
         torch.cuda.set_sync_debug_mode(SYNC_DEFAULT)
+
+
+def test_training_follows_the_recipe() -> None:
+    rows, _ = sample(QUALITY_LAW_DIMS)
+    recipe = law_recipe(ROWS, CLUSTERS, EPOCHS, SEED)
+    model = emeans(QUALITY_LAW_DIMS, CLUSTERS, recipe, PROBES, rows.device)
+    model.train(rows)
+    assert (model.recipe["batch_size"], model.recipe["alpha0"]) == (recipe.batch, recipe.alpha0)
+
+
+def test_training_rejects_non_finite_rows() -> None:
+    rows, _ = sample(QUALITY_LAW_DIMS)
+    rows[POISONED_ROW] = float("nan")
+    with pytest.raises(GpuInputError) as raised:
+        train(rows, CLUSTERS, law_recipe(ROWS, CLUSTERS, EPOCHS, SEED), PROBES)
+    assert raised.value.fault is Fault.NOT_FINITE

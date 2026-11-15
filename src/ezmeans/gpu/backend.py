@@ -42,17 +42,26 @@ class GroupedBackend(TritonBackend):
         return distance, labels
 
 
-def train(x: torch.Tensor, k: int, recipe: Recipe, probes: int) -> torch.Tensor:
+def emeans(dims: int, k: int, recipe: Recipe, probes: int, device: torch.device) -> TorchEmeans:
     model = TorchEmeans(
-        x.shape[1],
+        dims,
         k,
         nepochs=recipe.epochs,
+        batch_size=recipe.batch,
+        alpha0=recipe.alpha0,
         seed=recipe.seed,
         capture_assignments=False,
         assignment_backend=TritonBackend.name,
+        unused_threshold=recipe.tau,
     )
     model._execution_backend = GroupedBackend(
-        model.centroid_chunk_size, GroupIndex(k, x.shape[1], probes, recipe.seed, x.device)
+        model.centroid_chunk_size, GroupIndex(k, dims, probes, recipe.seed, device)
     )
-    centroids, _ = model.train(x)
+    return model
+
+
+def train(x: torch.Tensor, k: int, recipe: Recipe, probes: int) -> torch.Tensor:
+    if not bool(torch.isfinite(x).all()):
+        raise GpuInputError(Fault.NOT_FINITE)
+    centroids, _ = emeans(x.shape[1], k, recipe, probes, x.device).train(x)
     return torch.as_tensor(centroids)

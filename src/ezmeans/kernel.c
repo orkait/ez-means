@@ -5,7 +5,7 @@
 #include <string.h>
 
 enum { LANES = 16, CHUNK = 16, STREAMS = 4, MAX_PROBES = 64, ROW_CHUNK = 64, LABEL_CHUNK = 16 };
-enum Status { DONE = 0, BAD_PROBES = 1, NO_MEMORY = 2, BAD_LABEL = 3, BAD_DIMS = 4, BAD_SIZE = 5 };
+enum Status { DONE = 0, BAD_PROBES = 1, NO_MEMORY = 2, BAD_LABEL = 3, BAD_DIMS = 4, BAD_SIZE = 5, NOT_FINITE = 6 };
 
 static const double PI = 3.14159265358979323846;
 static const double UNIT = 0x1.0p-53;
@@ -210,6 +210,14 @@ static int64_t label_rows(const float *x, const int64_t *index, int64_t count, i
     return total;
 }
 
+static int all_found(const int64_t *labels, int64_t count)
+{
+    for (int64_t i = 0; i < count; i++)
+        if (labels[i] < 0)
+            return NOT_FINITE;
+    return DONE;
+}
+
 static int sum_rows(const float *x, const int64_t *index, int64_t count, int64_t dims, const int64_t *labels, int64_t k, float *sums,
                     float *counts)
 {
@@ -258,13 +266,17 @@ int assign(const float *rows, int64_t count, int64_t dims, const float *groups, 
         return BAD_PROBES;
     if (dims < CHUNK || dims % CHUNK != 0)
         return BAD_DIMS;
+    if (count == 0)
+        return DONE;
     int64_t *index = identity(count);
     Tiles group_tiles = {0}, cell_tiles = {0};
     int status = index ? tile_all(groups, group_count, dims, &group_tiles) : NO_MEMORY;
     if (status == DONE)
         status = tile(centroids, order, offsets, group_count, dims, &cell_tiles);
-    if (status == DONE)
+    if (status == DONE) {
         *work = label_rows(rows, index, count, dims, &group_tiles, &cell_tiles, probes, best, label);
+        status = all_found(label, count);
+    }
     free(index);
     release(&group_tiles);
     release(&cell_tiles);
@@ -306,6 +318,7 @@ static int regroup(const float *centroids, int64_t k, int64_t dims, const Settin
                 nearest(centroids + c * dims, &tiles, dims, only, 1, &best, homes + c, &total);
             }
             *work += total;
+            status = all_found(homes, k);
         }
         release(&tiles);
         if (status != DONE || round == settings->group_iterations)
@@ -428,16 +441,19 @@ static double scheduled(const Settings *settings, int64_t step, int64_t total)
 int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *plan, int64_t epochs, const Settings *settings,
           const float *init, int64_t init_count, float *out, int64_t *work)
 {
-    const int64_t rounded = llround(sqrt((double)k));
-    const int64_t group_count = rounded > 1 ? rounded : 1;
-    const int64_t width = (dims + CHUNK - 1) / CHUNK * CHUNK;
-    const int copying = width != dims;
     if (dims < 1)
         return BAD_DIMS;
-    if (settings->probes < 1 || settings->probes > MAX_PROBES || settings->probes > group_count)
-        return BAD_PROBES;
     if (k < 1 || k > n || settings->batch < 1 || settings->check_every < 1 || epochs < 1 || (init_count != 0 && init_count != k))
         return BAD_SIZE;
+    for (int64_t e = 0; e < epochs; e++)
+        if (plan[e] < 1 || plan[e] > n)
+            return BAD_SIZE;
+    const int64_t rounded = llround(sqrt((double)k));
+    const int64_t group_count = rounded > 1 ? rounded : 1;
+    if (settings->probes < 1 || settings->probes > MAX_PROBES || settings->probes > group_count)
+        return BAD_PROBES;
+    const int64_t width = (dims + CHUNK - 1) / CHUNK * CHUNK;
+    const int copying = width != dims;
     const size_t table = (size_t)(k * width);
     const int64_t batch = settings->batch;
     int64_t *order = identity(n);
@@ -499,8 +515,10 @@ int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *pla
             searches++;
             if (status == DONE)
                 status = tile(centroids, cell_order, offsets, group_count, width, &cell_tiles);
-            if (status == DONE)
+            if (status == DONE) {
                 *work += label_rows(rows, index, count, width, &group_tiles, &cell_tiles, settings->probes, best, labels);
+                status = all_found(labels, count);
+            }
             if (status == DONE)
                 status = sum_rows(rows, index, count, width, labels, k, sums, counts);
             release(&cell_tiles);

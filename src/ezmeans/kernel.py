@@ -31,6 +31,7 @@ class KernelStatus(IntEnum):
     BAD_LABEL = 3
     BAD_DIMS = 4
     BAD_SIZE = 5
+    NOT_FINITE = 6
 
 
 class KernelError(RuntimeError):
@@ -118,10 +119,13 @@ def check(status: int) -> None:
         raise KernelError(code)
 
 
-def assign(
-    rows: Matrix, groups: Matrix, centroids: Matrix, order: Labels, offsets: Labels, probes: int
-) -> tuple[Matrix, Labels, int]:
+def assign(rows: Matrix, groups: Matrix, centroids: Matrix, homes: Labels, probes: int) -> tuple[Matrix, Labels, int]:
     count, dims = rows.shape
+    if groups.shape[1:] != (dims,) or centroids.shape[1:] != (dims,) or homes.shape != (len(centroids),):
+        raise KernelError(KernelStatus.BAD_SIZE)
+    if np.any((homes < 0) | (homes >= len(groups))):
+        raise KernelError(KernelStatus.BAD_LABEL)
+    offsets = np.concatenate(([0], np.cumsum(np.bincount(homes, minlength=len(groups)))))
     best = np.empty(count, dtype=np.float32)
     labels = np.empty(count, dtype=np.int64)
     work = np.zeros(1, dtype=np.int64)
@@ -133,7 +137,7 @@ def assign(
             np.ascontiguousarray(groups),
             len(groups),
             np.ascontiguousarray(centroids),
-            np.ascontiguousarray(order, dtype=np.int64),
+            np.ascontiguousarray(np.argsort(homes, kind="stable"), dtype=np.int64),
             np.ascontiguousarray(offsets, dtype=np.int64),
             probes,
             best,
@@ -146,6 +150,8 @@ def assign(
 
 def accumulate(rows: Matrix, labels: Labels, k: int) -> tuple[Matrix, Matrix]:
     count, dims = rows.shape
+    if labels.shape != (count,):
+        raise KernelError(KernelStatus.BAD_SIZE)
     sums = np.empty((k, dims), dtype=np.float32)
     counts = np.empty(k, dtype=np.float32)
     check(
@@ -158,6 +164,8 @@ def accumulate(rows: Matrix, labels: Labels, k: int) -> tuple[Matrix, Matrix]:
 
 def train(x: Matrix, k: int, plan: list[int], settings: Settings, init: Matrix | None) -> tuple[Matrix, int]:
     n, dims = x.shape
+    if init is not None and init.shape != (k, dims):
+        raise KernelError(KernelStatus.BAD_SIZE)
     centroids = np.empty((k, dims), dtype=np.float32)
     work = np.zeros(1, dtype=np.int64)
     rows = np.asarray(plan, dtype=np.int64)

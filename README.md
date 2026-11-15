@@ -44,6 +44,13 @@ centroids, work = ez_means(x, 1024, law_recipe(len(x), 1024, 2, 0), 4)
 
 The first call compiles `src/ezmeans/kernel.c` with `gcc` into `~/.cache/ezmeans/`. Fewer probes is faster and can miss a point's nearest centroid; probing every group is exact.
 
+| Error | Raised when |
+|---|---|
+| `KernelError(NOT_FINITE)` | a row or centroid has no finite squared distance: a NaN, an infinity, or values large enough to overflow `float32` |
+| `KernelError(BAD_SIZE)` | `k` is below 1 or above the rows, `init` is not `k × d`, or the epochs cover no rows |
+| `KernelError(BAD_PROBES)` | `probes` is below 1, above the √k groups, or above 64 |
+| `ValueError` | a `Recipe` with `epochs <= 0` or `alpha0` outside (0, 1] |
+
 ## ⚡ GPU
 
 ```bash
@@ -59,7 +66,7 @@ x = torch.randn(1_000_000, 96, device="cuda").to(torch.bfloat16)
 centroids = train(x, 16384, law_recipe(len(x), 16384, 2, 0), 4)
 ```
 
-`ezmeans.gpu` runs faiss' GPU e-means (`TorchEmeans`) with its assignment swapped for a grouped search in Triton kernels that never synchronize the host. `x` is a CUDA `bfloat16` tensor; distances accumulate in `float32`.
+`ezmeans.gpu` runs faiss' GPU e-means (`TorchEmeans`) with its assignment swapped for a grouped search in Triton kernels that never synchronize the host. `x` is a CUDA `bfloat16` tensor; distances accumulate in `float32`. It trains with the recipe's batch, step and revival threshold, the same as the CPU path, and rows that are not finite raise `GpuInputError(NOT_FINITE)`.
 
 ## 📦 Installation
 
