@@ -4,7 +4,7 @@ from faiss.contrib.e_means.torch_backend import TritonBackend
 
 from ezmeans.gpu.constants import MAX_ROW_NORM
 from ezmeans.gpu.index import Fault, GpuInputError, GroupIndex
-from ezmeans.recipe import CHECK_EVERY, Recipe
+from ezmeans.recipe import CHECK_EVERY, Recipe, default_probes
 
 
 class GroupedBackend(TritonBackend):
@@ -60,10 +60,10 @@ def emeans(dims: int, k: int, recipe: Recipe, probes: int, device: torch.device)
     return model, backend
 
 
-def train(x: torch.Tensor, k: int, recipe: Recipe, probes: int) -> torch.Tensor:
+def train(x: torch.Tensor, k: int, recipe: Recipe, probes: int | None = None) -> torch.Tensor:
     if not bool(torch.linalg.vector_norm(x, dim=1, dtype=torch.float32).max() < MAX_ROW_NORM):
         raise GpuInputError(Fault.NOT_FINITE)
-    model, backend = emeans(x.shape[1], k, recipe, probes, x.device)
+    model, backend = emeans(x.shape[1], k, recipe, default_probes(k) if probes is None else probes, x.device)
     centroids, _ = model.train(x)
     if backend.batches == 0:
         raise GpuInputError(Fault.UNSUPPORTED_FAISS)

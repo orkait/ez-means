@@ -3,7 +3,7 @@ from collections.abc import Callable
 
 import pytest
 
-from ezmeans.recipe import law_recipe
+from ezmeans.recipe import default_probes, law_recipe
 
 ROWS = 4096
 CLUSTERS = 256
@@ -46,3 +46,10 @@ def test_law_matches_faiss(n: int, k: int, epochs: float) -> None:
     base = pytest.importorskip("faiss.contrib.e_means.base")
     recipe = law_recipe(n, k, epochs, SEED)
     assert (recipe.batch, recipe.alpha0) == base._resolve_recipe(n, k, epochs, BATCH_LAW, None, None)
+
+
+@pytest.mark.parametrize(
+    ("k", "probes"), [(4, 2), (16, 4), (1_024, 4), (4_096, 4), (16_384, 8), (65_536, 16), (262_144, 32)]
+)
+def test_default_probes_cover_a_sixteenth_of_the_groups(k: int, probes: int) -> None:
+    assert default_probes(k) == probes

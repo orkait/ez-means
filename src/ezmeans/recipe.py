@@ -11,6 +11,8 @@ BATCH_LAW = (0.035134, 0.134749, 0.876473, 0.813344)
 STEP_LAW = (0.8244, -0.4617, 0.9003, -0.4498, -0.1057)
 MIN_ALPHA0 = 1e-4
 MAX_ALPHA0 = 1.0
+MIN_PROBES = 4
+GROUPS_PER_PROBE = 16
 
 
 @dataclass(frozen=True)
@@ -30,6 +32,11 @@ class Recipe:
 
 def group_count(k: int) -> int:
     return max(1, round(math.sqrt(k)))
+
+
+def default_probes(k: int) -> int:
+    groups = group_count(k)
+    return min(groups, max(MIN_PROBES, math.ceil(groups / GROUPS_PER_PROBE)))
 
 
 def epoch_rows(n: int, epochs: float) -> list[int]:

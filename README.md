@@ -34,13 +34,14 @@ from ezmeans.recipe import law_recipe
 from ezmeans.trainer import ez_means
 
 x = np.random.default_rng(0).standard_normal((100_000, 128)).astype(np.float32)
-centroids = ez_means(x, 1024, law_recipe(len(x), 1024, 2, 0), 4)
+centroids = ez_means(x, 1024, law_recipe(len(x), 1024, 2, 0))
 ```
 
 | Call | Returns |
 |---|---|
 | `law_recipe(n, k, epochs, seed)` | the batch size and step size from the e-means scaling law |
-| `ez_means(x, k, recipe, probes, init=None)` | the `k × d` centroids; `init` is an optional `k × d` start |
+| `ez_means(x, k, recipe, probes=None, init=None)` | the `k × d` centroids; `init` is an optional `k × d` start |
+| `default_probes(k)` | the probes used when `probes` is `None`: 1/16 of the √k groups, at least 4 (4 at k=4096, 8 at 16384, 16 at 65536) |
 
 The first call compiles `src/ezmeans/kernel.c` with `gcc` into `~/.cache/ezmeans/`. Fewer probes is faster and can miss a point's nearest centroid; probing every group is exact.
 
@@ -63,7 +64,7 @@ from ezmeans.gpu.backend import train
 from ezmeans.recipe import law_recipe
 
 x = torch.randn(1_000_000, 96, device="cuda").to(torch.bfloat16)
-centroids = train(x, 16384, law_recipe(len(x), 16384, 2, 0), 4)
+centroids = train(x, 16384, law_recipe(len(x), 16384, 2, 0))
 ```
 
 `ezmeans.gpu` runs faiss' GPU e-means (`TorchEmeans`) with its assignment swapped for a grouped search in Triton kernels that never synchronize the host. `x` is a CUDA `bfloat16` tensor; distances accumulate in `float32`. It trains with the recipe's batch, step and revival threshold, the same as the CPU path, and rows that are not finite, or whose norm passes about 9.2e18 (half the square root of the `float32` maximum, where squared distances could overflow), raise `GpuInputError(NOT_FINITE)`.

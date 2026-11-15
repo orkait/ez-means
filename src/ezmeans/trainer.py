@@ -7,14 +7,15 @@ from ezmeans.recipe import (
     INIT_USAGE,
     SPLIT_EPSILON,
     Recipe,
+    default_probes,
     epoch_rows,
 )
 
 
-def ez_means(x: Matrix, k: int, recipe: Recipe, probes: int, init: Matrix | None = None) -> Matrix:
+def ez_means(x: Matrix, k: int, recipe: Recipe, probes: int | None = None, init: Matrix | None = None) -> Matrix:
     settings = kernel.Settings(
         batch=recipe.batch,
-        probes=probes,
+        probes=default_probes(k) if probes is None else probes,
         check_every=CHECK_EVERY,
         group_iterations=GROUP_ITERATIONS,
         seed=recipe.seed,
