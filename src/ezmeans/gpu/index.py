@@ -19,6 +19,7 @@ class Fault(Enum):
     NOT_GROUPED = "regroup must run before refresh or assign"
     SPHERICAL = "only Euclidean assignment is supported"
     NOT_FINITE = "the rows must be finite"
+    UNSUPPORTED_FAISS = "this faiss version bypassed the grouped assignment backend"
 
 
 class GpuInputError(ValueError):

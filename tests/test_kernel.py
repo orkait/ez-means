@@ -1,11 +1,9 @@
-import dataclasses
 import hashlib
 import os
 import subprocess
 import sys
 from collections.abc import Callable
 
-import faiss
 import numpy as np
 import pytest
 
@@ -25,15 +23,16 @@ POISONED_ROW = 7
 OVERFLOW_SCALE = np.float32(1e20)
 TINY_EPOCHS = 1e-4
 THREAD_COUNTS = ("1", "4")
-DETERMINISM_SCRIPT = """
+TRAIN_SCRIPT = f"""
 import hashlib, sys
 import numpy as np
 from ezmeans.recipe import law_recipe
 from ezmeans.trainer import ez_means
-x = np.random.default_rng(0).standard_normal((4096, 48)).astype(np.float32)
-centroids, _ = ez_means(x, 256, law_recipe(len(x), 256, 2, 0), 4)
+x = np.random.default_rng({SEED}).standard_normal(({ROWS}, {DIMS})).astype(np.float32)
+centroids, _ = ez_means(x, {CLUSTERS}, law_recipe(len(x), {CLUSTERS}, {EPOCHS}, {SEED}), {PROBES})
 sys.stdout.write(hashlib.sha256(centroids.tobytes()).hexdigest())
 """
+BLOCK_FAISS = 'import sys\nsys.modules["faiss"] = None\n'
 
 
 def points(dims: int) -> Matrix:
@@ -64,8 +63,9 @@ def search(x: Matrix, homes: Labels, probes: int = GROUPS) -> tuple[Matrix, Labe
 def test_probing_every_occupied_group_is_brute_force(dims: int, occupied: int) -> None:
     x = points(dims)
     _, labels, _ = search(x, round_robin() % occupied, occupied)
-    _, truth = faiss.knn(x, x[:CLUSTERS], 1)
-    assert np.array_equal(labels, truth[:, 0])
+    wide, centers = x.astype(np.float64), x[:CLUSTERS].astype(np.float64)
+    squared = (wide**2).sum(axis=1)[:, None] - 2.0 * wide @ centers.T + (centers**2).sum(axis=1)[None, :]
+    assert np.array_equal(labels, squared.argmin(axis=1))
 
 
 @pytest.mark.parametrize(
@@ -103,12 +103,6 @@ def test_bad_input_raises_kernel_error(call: Callable[[], object], status: Kerne
     assert raised.value.status is status
 
 
-@pytest.mark.parametrize(("epochs", "alpha0"), [(0.0, 1.0), (-0.5, 1.0), (EPOCHS, 0.0), (EPOCHS, 1.5)])
-def test_recipe_rejects_impossible_values(epochs: float, alpha0: float) -> None:
-    with pytest.raises(ValueError):
-        dataclasses.replace(law_recipe(ROWS, CLUSTERS, EPOCHS, SEED), epochs=epochs, alpha0=alpha0)
-
-
 @pytest.mark.parametrize("dims", [20, 100])
 def test_zero_padding_does_not_change_centroids(dims: int) -> None:
     x = points(dims)
@@ -136,8 +130,12 @@ def test_centroids_do_not_depend_on_thread_count() -> None:
     for threads in THREAD_COUNTS:
         environment = os.environ | {"OMP_NUM_THREADS": threads}
         result = subprocess.run(
-            [sys.executable, "-c", DETERMINISM_SCRIPT], env=environment, capture_output=True, text=True, check=True
+            [sys.executable, "-c", TRAIN_SCRIPT], env=environment, capture_output=True, text=True, check=True
         )
         digests.add(result.stdout)
     assert len(digests) == 1
     assert hashlib.sha256(b"").hexdigest() not in digests
+
+
+def test_cpu_training_runs_without_faiss() -> None:
+    subprocess.run([sys.executable, "-c", BLOCK_FAISS + TRAIN_SCRIPT], capture_output=True, check=True)

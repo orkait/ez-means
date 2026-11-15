@@ -1,15 +1,16 @@
 import math
 from dataclasses import dataclass
 
-from faiss.contrib.e_means.base import _resolve_recipe
-
-BATCH_LAW = "throughput"
 REVIVAL_THRESHOLD = 0.1
 INIT_USAGE = 2.0**-16
 CHECK_EVERY = 5
 ALPHA_MIN_FACTOR = 0.1
 SPLIT_EPSILON = 1e-4
 GROUP_ITERATIONS = 10
+BATCH_LAW = (0.035134, 0.134749, 0.876473, 0.813344)
+STEP_LAW = (0.8244, -0.4617, 0.9003, -0.4498, -0.1057)
+MIN_ALPHA0 = 1e-4
+MAX_ALPHA0 = 1.0
 
 
 @dataclass(frozen=True)
@@ -23,8 +24,8 @@ class Recipe:
     def __post_init__(self) -> None:
         if not self.epochs > 0:
             raise ValueError(f"epochs must be positive, got {self.epochs}")
-        if not 0 < self.alpha0 <= 1:
-            raise ValueError(f"alpha0 must be in (0, 1], got {self.alpha0}")
+        if not 0 < self.alpha0 <= MAX_ALPHA0:
+            raise ValueError(f"alpha0 must be in (0, {MAX_ALPHA0}], got {self.alpha0}")
 
 
 def group_count(k: int) -> int:
@@ -39,6 +40,20 @@ def epoch_rows(n: int, epochs: float) -> list[int]:
     return [n] * (whole - 1) + ([remainder] if remainder else []) + [n]
 
 
+def nearest_power_of_two(value: float) -> int:
+    if value <= 1:
+        return 1
+    low = 1 << math.floor(math.log2(value))
+    high = 2 * low
+    return low if value / low < high / value else high
+
+
 def law_recipe(n: int, k: int, epochs: float, seed: int) -> Recipe:
-    batch, alpha0 = _resolve_recipe(n, k, epochs, BATCH_LAW, None, None)
-    return Recipe(epochs, int(batch), float(alpha0), REVIVAL_THRESHOLD, seed)
+    if n < 1 or k < 1 or not epochs > 0:
+        raise ValueError(f"the scaling law needs n >= 1, k >= 1 and epochs > 0, got n={n}, k={k}, epochs={epochs}")
+    rate, k_power, n_power, epochs_power = BATCH_LAW
+    law_batch = nearest_power_of_two(rate * k**k_power * n**n_power * epochs**epochs_power)
+    batch = max(1, min(law_batch, nearest_power_of_two(n / 2), n))
+    step, k_power, batch_power, n_power, epochs_power = STEP_LAW
+    alpha0 = step * k**k_power * batch**batch_power * n**n_power * epochs**epochs_power
+    return Recipe(epochs, batch, min(max(alpha0, MIN_ALPHA0), MAX_ALPHA0), REVIVAL_THRESHOLD, seed)

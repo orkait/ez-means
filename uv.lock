@@ -159,36 +159,39 @@ name = "ezmeans"
 version = "0.0.1"
 source = { editable = "." }
 dependencies = [
-    { name = "faiss-cpu" },
     { name = "numpy" },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "mypy" },
-    { name = "pytest" },
-    { name = "ruff" },
-]
+[package.optional-dependencies]
 gpu = [
+    { name = "faiss-cpu" },
     { name = "torch" },
     { name = "triton" },
 ]
 
-[package.metadata]
-requires-dist = [
-    { name = "faiss-cpu", specifier = "==1.16.0" },
-    { name = "numpy", specifier = "==2.5.4" },
-]
-
-[package.metadata.requires-dev]
+[package.dev-dependencies]
 dev = [
+    { name = "faiss-cpu" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "ruff" },
 ]
-gpu = [
-    { name = "torch", specifier = "==2.15.0" },
-    { name = "triton", specifier = "==3.9.0" },
+
+[package.metadata]
+requires-dist = [
+    { name = "faiss-cpu", marker = "extra == 'gpu'", specifier = ">=1.16" },
+    { name = "numpy", specifier = ">=2.1" },
+    { name = "torch", marker = "extra == 'gpu'", specifier = ">=2.15" },
+    { name = "triton", marker = "extra == 'gpu'", specifier = ">=3.9" },
+]
+provides-extras = ["gpu"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "faiss-cpu", specifier = ">=1.16" },
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "ruff" },
 ]
 
 [[package]]

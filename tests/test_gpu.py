@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from ezmeans.gpu.backend import emeans, train
+from ezmeans.gpu.backend import GroupedBackend, emeans, train
 from ezmeans.gpu.index import Fault, GpuInputError, GroupIndex
 from ezmeans.recipe import group_count, law_recipe
 
@@ -14,6 +14,7 @@ SEED = 0
 EPOCHS = 1
 QUALITY_LAW_DIMS = 8
 POISONED_ROW = 7
+FOREIGN_BACKEND = "foreign"
 SYNC_ERROR = "error"
 SYNC_DEFAULT = "default"
 SCORE_TOLERANCE = 1e-5
@@ -58,7 +59,7 @@ def test_index_never_synchronizes_the_host() -> None:
 def test_training_follows_the_recipe() -> None:
     rows, _ = sample(QUALITY_LAW_DIMS)
     recipe = law_recipe(ROWS, CLUSTERS, EPOCHS, SEED)
-    model = emeans(QUALITY_LAW_DIMS, CLUSTERS, recipe, PROBES, rows.device)
+    model, _ = emeans(QUALITY_LAW_DIMS, CLUSTERS, recipe, PROBES, rows.device)
     model.train(rows)
     assert (model.recipe["batch_size"], model.recipe["alpha0"]) == (recipe.batch, recipe.alpha0)
 
@@ -69,3 +70,11 @@ def test_training_rejects_non_finite_rows() -> None:
     with pytest.raises(GpuInputError) as raised:
         train(rows, CLUSTERS, law_recipe(ROWS, CLUSTERS, EPOCHS, SEED), PROBES)
     assert raised.value.fault is Fault.NOT_FINITE
+
+
+def test_training_fails_when_faiss_bypasses_the_grouped_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(GroupedBackend, "name", FOREIGN_BACKEND)
+    rows, _ = sample(QUALITY_LAW_DIMS)
+    with pytest.raises(GpuInputError) as raised:
+        train(rows, CLUSTERS, law_recipe(ROWS, CLUSTERS, EPOCHS, SEED), PROBES)
+    assert raised.value.fault is Fault.UNSUPPORTED_FAISS

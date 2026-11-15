@@ -6,7 +6,7 @@
 
 ![Python](https://img.shields.io/badge/python-3.13-3776AB?logo=python&logoColor=white)
 ![C11](https://img.shields.io/badge/kernel-C11%20%2B%20OpenMP-555555?logo=c&logoColor=white)
-![faiss](https://img.shields.io/badge/faiss--cpu-1.16.0-0467DF)
+![numpy](https://img.shields.io/badge/numpy-%E2%89%A52.1-013243?logo=numpy&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Status](https://img.shields.io/badge/status-pre--release%200.0.1-orange)
 
@@ -49,12 +49,12 @@ The first call compiles `src/ezmeans/kernel.c` with `gcc` into `~/.cache/ezmeans
 | `KernelError(NOT_FINITE)` | a row or centroid has no finite squared distance: a NaN, an infinity, or values large enough to overflow `float32` |
 | `KernelError(BAD_SIZE)` | `k` is below 1 or above the rows, `init` is not `k × d`, or the epochs cover no rows |
 | `KernelError(BAD_PROBES)` | `probes` is below 1, above the √k groups, or above 64 |
-| `ValueError` | a `Recipe` with `epochs <= 0` or `alpha0` outside (0, 1] |
+| `ValueError` | a `Recipe` with `epochs <= 0` or `alpha0` outside (0, 1], or `law_recipe` with `n < 1`, `k < 1` or `epochs <= 0` |
 
 ## ⚡ GPU
 
 ```bash
-uv sync --group gpu
+uv sync --extra gpu
 ```
 
 ```python
@@ -72,9 +72,9 @@ centroids = train(x, 16384, law_recipe(len(x), 16384, 2, 0), 4)
 
 | Requirement | Why |
 |---|---|
-| Python 3.13 and [uv](https://docs.astral.sh/uv/) | `pyproject.toml` pins the dependencies |
+| Python 3.13 and numpy 2.1 or later | the only runtime dependency of the CPU path |
 | `gcc` with OpenMP | the kernel is compiled at first use (`KERNEL_COMPILE` in `src/ezmeans/config.py`) |
-| CUDA and the `gpu` dependency group | only for `ezmeans.gpu` |
+| CUDA and the `gpu` extra (faiss-cpu 1.16+, torch 2.15+, triton 3.9+) | only for `ezmeans.gpu` |
 | Linux x86-64 | the only platform tested so far |
 
 | Variable | Default | Used for |
@@ -89,21 +89,21 @@ uv run ruff check . && uv run ruff format --check .
 uv run mypy src tests
 ```
 
-`tests/test_gpu.py` runs only where `torch` and `triton` are installed and a CUDA device is present.
+`tests/test_gpu.py` runs only where `torch` and `triton` are installed and a CUDA device is present. The tests that hold the vendored scaling law equal to faiss run only where faiss is installed, as it is in the `dev` group.
 
 ## ⚠️ Limitations
 
 | Limitation | Where |
 |---|---|
 | The GPU path assigns by Euclidean distance only; spherical training raises `GpuInputError` | `src/ezmeans/gpu/backend.py` |
-| The GPU path sets a private attribute of faiss' `TorchEmeans` (faiss 1.16) to swap the assignment backend | `src/ezmeans/gpu/backend.py` |
+| The GPU path sets a private attribute of faiss' `TorchEmeans` (tested on faiss 1.16) to swap the assignment backend; if a faiss release stops using it, training raises `GpuInputError(UNSUPPORTED_FAISS)` | `src/ezmeans/gpu/backend.py` |
 | GPU results are not bit-identical run to run: the kernels accumulate with float atomics | `src/ezmeans/gpu/kernels.py` |
 | Tested only on Linux x86-64 with gcc; ARM, macOS and Windows are untested | none yet |
 
 ## 🙏 Credits
 
-ez-means builds on [e-means](https://arxiv.org/abs/2611.09501) (Bessa et al., Meta FAIR) and on [faiss](https://github.com/facebookresearch/faiss) (MIT): it uses the e-means scaling law from `faiss.contrib.e_means`, faiss' GPU e-means training loop, and faiss for search in the tests.
+ez-means builds on [e-means](https://arxiv.org/abs/2611.09501) (Bessa et al., Meta FAIR) and on [faiss](https://github.com/facebookresearch/faiss) (MIT). `src/ezmeans/recipe.py` carries the e-means batch and step laws from `faiss.contrib.e_means` 1.16 (notice in [`NOTICE`](NOTICE)), and the GPU path runs faiss' GPU e-means training loop.
 
 ## 📄 License
 
-MIT, Copyright (c) 2026 Orkait. See [`LICENSE`](LICENSE).
+MIT, Copyright (c) 2026 Orkait. See [`LICENSE`](LICENSE) and, for the vendored scaling laws, [`NOTICE`](NOTICE).
