@@ -97,9 +97,8 @@ uv run mypy src tests
 | `src/ezmeans/cpu/` | `kernel.c` (C11 + OpenMP), `build.py` (hash-keyed gcc build), `native.py` (ctypes binding and input checks), `trainer.py` |
 | `src/ezmeans/gpu/` | `kernels.py` (Triton), `index.py` (`GroupIndex`), `trainer.py` (the e-means loop), `constants.py` |
 | `tests/` | `test_recipe.py`, `test_cpu.py`, `test_gpu.py` |
-| `stubs/triton/` | typed stubs for the Triton API the kernels use, so mypy checks them strictly; triton ships no type information |
 
-The `dev` group installs torch and triton, so mypy and the tests always see the GPU code; `tests/test_gpu.py` skips only where no CUDA device is present. The tests that hold the vendored scaling law equal to faiss run where faiss is installed, as it is in the `dev` group.
+`tests/test_gpu.py` runs only where `torch` and `triton` are installed and a CUDA device is present. The tests that hold the vendored scaling law equal to faiss run only where faiss is installed, as it is in the `dev` group.
 
 ## ⚠️ Limitations
 

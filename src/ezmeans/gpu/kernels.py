@@ -1,5 +1,3 @@
-from typing import Annotated, NamedTuple
-
 import torch
 import triton
 import triton.language as tl
@@ -20,462 +18,544 @@ from ezmeans.gpu.constants import (
     SELECT_ROWS,
     UNREACHABLE,
 )
-from ezmeans.recipe import group_count
-
-
-class Geometry(NamedTuple):
-    dims: int
-    padded: int
-    chunk: int
-    clusters: int
-    groups: int
-    span: int
-    probes: int
-    tile: int
-
-
-class Matrix[T](NamedTuple):
-    data: T
-    stride: int
-    rows: int
-
-
-class Vectors[T](NamedTuple):
-    data: T
-    norms: T
-
-
-class Members[T](NamedTuple):
-    data: T
-    norms: T
-    order: T
-    ends: T
-    sizes: T
-
-
-class Lloyd[T](NamedTuple):
-    dots: T
-    owner: T
-    sums: T
-    sizes: T
-
-
-class Pairs[T](NamedTuple):
-    top: T
-    items: T
-    counts: T
-    ends: T
-    blocks: T
-    fill: T
-    value: T
-    ident: T
-    total: int
-
-
-class State[T](NamedTuple):
-    centroids: T
-    usage: T
-    sums: T
-    counts: T
-    pass_sums: T
-    pass_counts: T
-
-
-class Rate(NamedTuple):
-    alpha: float
-    keep: float
-
-
-class Mode(NamedTuple):
-    decays: bool
-    last: bool
 
 
 @triton.jit
 def _select(
-    rows: Matrix[tl.tensor],
-    centers: Vectors[tl.tensor],
-    pairs: Pairs[tl.tensor],
-    geometry: "Annotated[Geometry, tl.constexpr]",
-    block: "Annotated[int, tl.constexpr]",
-) -> None:
-    offs = tl.program_id(0) * block + tl.arange(0, block)
-    live = offs < rows.rows
-    groups = tl.arange(0, geometry.span)
-    dots = tl.zeros((block, geometry.span), tl.float32)
-    for base in tl.static_range(0, geometry.padded, geometry.chunk):
-        cols = base + tl.arange(0, geometry.chunk)
+    rows,
+    row_stride,
+    n,
+    centers,
+    center_norms,
+    top,
+    counts,
+    D: tl.constexpr,
+    DP: tl.constexpr,
+    DK: tl.constexpr,
+    GP: tl.constexpr,
+    BM: tl.constexpr,
+    P: tl.constexpr,
+):
+    offs = tl.program_id(0) * BM + tl.arange(0, BM)
+    live = offs < n
+    groups = tl.arange(0, GP)
+    dots = tl.zeros((BM, GP), tl.float32)
+    for base in tl.static_range(0, DP, DK):
+        cols = base + tl.arange(0, DK)
         a = tl.load(
-            rows.data + offs[:, None].to(tl.int64) * rows.stride + cols[None, :],
-            mask=live[:, None] & (cols[None, :] < geometry.dims),
+            rows + offs[:, None].to(tl.int64) * row_stride + cols[None, :],
+            mask=live[:, None] & (cols[None, :] < D),
             other=0.0,
         )
-        dots += tl.dot(a, tl.load(centers.data + groups[None, :] * geometry.padded + cols[:, None]))
-    score = tl.load(centers.norms + groups)[None, :] - 2.0 * dots
-    for j in tl.static_range(geometry.probes):
+        dots += tl.dot(a, tl.load(centers + groups[None, :] * DP + cols[:, None]))
+    score = tl.load(center_norms + groups)[None, :] - 2.0 * dots
+    for j in tl.static_range(P):
         pick = tl.argmin(score, axis=1)
-        tl.store(pairs.top + offs * geometry.probes + j, pick, mask=live)
-        tl.atomic_add(pairs.counts + pick, 1, mask=live, sem=RELAXED)
-        picked = (groups[None, :] <= pick[:, None]) & (groups[None, :] >= pick[:, None])
-        score = tl.where(picked, float("inf"), score)
+        tl.store(top + offs * P + j, pick, mask=live)
+        tl.atomic_add(counts + pick, 1, mask=live, sem=RELAXED)
+        score = tl.where(groups[None, :] == pick[:, None], float("inf"), score)
 
 
 @triton.jit
-def _plan(
-    pairs: Pairs[tl.tensor], geometry: "Annotated[Geometry, tl.constexpr]", block: "Annotated[int, tl.constexpr]"
-) -> None:
-    groups = tl.arange(0, geometry.span)
-    live = groups < geometry.groups
-    size = tl.load(pairs.counts + groups, mask=live, other=0)
-    tl.store(pairs.ends + groups, tl.cumsum(size, axis=0), mask=live)
-    tl.store(pairs.blocks + groups, tl.cumsum((size + block - 1) // block, axis=0), mask=live)
+def _plan(counts, ends, blocks, G, GP: tl.constexpr, BM: tl.constexpr):
+    groups = tl.arange(0, GP)
+    live = groups < G
+    size = tl.load(counts + groups, mask=live, other=0)
+    tl.store(ends + groups, tl.cumsum(size, axis=0), mask=live)
+    tl.store(blocks + groups, tl.cumsum((size + BM - 1) // BM, axis=0), mask=live)
 
 
 @triton.jit
-def _bucket(pairs: Pairs[tl.tensor], block: "Annotated[int, tl.constexpr]") -> None:
-    offs = tl.program_id(0) * block + tl.arange(0, block)
-    live = offs < pairs.total
-    key = tl.load(pairs.top + offs, mask=live, other=0)
-    start = tl.load(pairs.ends + key, mask=live, other=0) - tl.load(pairs.counts + key, mask=live, other=0)
-    tl.store(pairs.items + start + tl.atomic_add(pairs.fill + key, 1, mask=live, sem=RELAXED), offs, mask=live)
+def _bucket(keys, m, ends, counts, fill, out, BLOCK: tl.constexpr):
+    offs = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    live = offs < m
+    key = tl.load(keys + offs, mask=live, other=0)
+    start = tl.load(ends + key, mask=live, other=0) - tl.load(counts + key, mask=live, other=0)
+    tl.store(out + start + tl.atomic_add(fill + key, 1, mask=live, sem=RELAXED), offs, mask=live)
 
 
 @triton.jit
 def _member(
-    rows: Matrix[tl.tensor],
-    pairs: Pairs[tl.tensor],
-    members: Members[tl.tensor],
-    geometry: "Annotated[Geometry, tl.constexpr]",
-    block: "Annotated[int, tl.constexpr]",
-) -> None:
+    rows,
+    row_stride,
+    items,
+    members,
+    member_norms,
+    order,
+    group_ends,
+    group_sizes,
+    pair_ends,
+    pair_counts,
+    pair_blocks,
+    G,
+    value,
+    ident,
+    D: tl.constexpr,
+    DP: tl.constexpr,
+    DK: tl.constexpr,
+    GP: tl.constexpr,
+    BM: tl.constexpr,
+    BN: tl.constexpr,
+    P: tl.constexpr,
+):
     pid = tl.program_id(0)
-    groups = tl.arange(0, geometry.span)
-    reach = tl.load(pairs.blocks + groups, mask=groups < geometry.groups, other=UNREACHABLE)
-    group = tl.sum((reach <= pid).to(tl.int32), axis=0)
-    if group >= geometry.groups:
+    groups = tl.arange(0, GP)
+    reach = tl.load(pair_blocks + groups, mask=groups < G, other=UNREACHABLE)
+    g = tl.sum((reach <= pid).to(tl.int32), axis=0)
+    if g >= G:
         return
-    count = tl.load(pairs.counts + group)
-    first_block = tl.load(pairs.blocks + group) - (count + block - 1) // block
-    end = tl.load(pairs.ends + group)
-    offs = end - count + (pid - first_block) * block + tl.arange(0, block)
+    count = tl.load(pair_counts + g)
+    first_block = tl.load(pair_blocks + g) - (count + BM - 1) // BM
+    end = tl.load(pair_ends + g)
+    offs = end - count + (pid - first_block) * BM + tl.arange(0, BM)
     live = offs < end
-    item = tl.load(pairs.items + offs, mask=live, other=0)
-    point = (item // geometry.probes).to(tl.int64)
-    hi = tl.load(members.ends + group)
-    lo = hi - tl.load(members.sizes + group)
-    best = tl.full((block,), float("inf"), tl.float32)
-    best_id = tl.zeros((block,), tl.int32)
-    for first in tl.range(lo, hi, geometry.tile):
-        lanes = first + tl.arange(0, geometry.tile)
+    item = tl.load(items + offs, mask=live, other=0)
+    point = (item // P).to(tl.int64)
+    hi = tl.load(group_ends + g)
+    lo = hi - tl.load(group_sizes + g)
+    best = tl.full((BM,), float("inf"), tl.float32)
+    best_id = tl.zeros((BM,), tl.int32)
+    for first in range(lo, hi, BN):
+        lanes = first + tl.arange(0, BN)
         inside = lanes < hi
-        dots = tl.zeros((block, geometry.tile), tl.float32)
-        for base in tl.static_range(0, geometry.padded, geometry.chunk):
-            cols = base + tl.arange(0, geometry.chunk)
+        dots = tl.zeros((BM, BN), tl.float32)
+        for base in tl.static_range(0, DP, DK):
+            cols = base + tl.arange(0, DK)
             a = tl.load(
-                rows.data + point[:, None] * rows.stride + cols[None, :],
-                mask=live[:, None] & (cols[None, :] < geometry.dims),
-                other=0.0,
+                rows + point[:, None] * row_stride + cols[None, :], mask=live[:, None] & (cols[None, :] < D), other=0.0
             )
-            b = tl.load(
-                members.data + lanes[None, :].to(tl.int64) * geometry.padded + cols[:, None],
-                mask=inside[None, :],
-                other=0.0,
-            )
+            b = tl.load(members + lanes[None, :].to(tl.int64) * DP + cols[:, None], mask=inside[None, :], other=0.0)
             dots += tl.dot(a, b)
-        score = tl.load(members.norms + lanes, mask=inside, other=float("inf"))[None, :] - 2.0 * dots
+        score = tl.load(member_norms + lanes, mask=inside, other=float("inf"))[None, :] - 2.0 * dots
         low = tl.min(score, axis=1)
         lane = first + tl.argmin(score, axis=1)
         take = low < best
         best = tl.where(take, low, best)
-        best_id = tl.where(take, tl.load(members.order + lane, mask=lane < hi, other=0), best_id)
-    tl.store(pairs.value + item, best, mask=live)
-    tl.store(pairs.ident + item, best_id, mask=live)
+        best_id = tl.where(take, tl.load(order + lane, mask=lane < hi, other=0), best_id)
+    tl.store(value + item, best, mask=live)
+    tl.store(ident + item, best_id, mask=live)
 
 
 @triton.jit
-def _reduce(
-    pairs: Pairs[tl.tensor],
-    labels: tl.tensor,
-    count: int,
-    geometry: "Annotated[Geometry, tl.constexpr]",
-    block: "Annotated[int, tl.constexpr]",
-) -> None:
-    offs = tl.program_id(0) * block + tl.arange(0, block)
-    live = offs < count
-    best = tl.full((block,), float("inf"), tl.float32)
-    best_id = tl.zeros((block,), tl.int32)
-    for j in tl.static_range(geometry.probes):
-        candidate = tl.load(pairs.value + offs * geometry.probes + j, mask=live, other=float("inf"))
+def _reduce(value, ident, n, labels, P: tl.constexpr, BLOCK: tl.constexpr):
+    offs = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    live = offs < n
+    best = tl.full((BLOCK,), float("inf"), tl.float32)
+    best_id = tl.zeros((BLOCK,), tl.int32)
+    for j in tl.static_range(P):
+        candidate = tl.load(value + offs * P + j, mask=live, other=float("inf"))
         take = candidate < best
         best = tl.where(take, candidate, best)
-        best_id = tl.where(take, tl.load(pairs.ident + offs * geometry.probes + j, mask=live, other=0), best_id)
+        best_id = tl.where(take, tl.load(ident + offs * P + j, mask=live, other=0), best_id)
     tl.store(labels + offs, best_id.to(tl.int64), mask=live)
 
 
 @triton.jit
 def _refresh(
-    centroids: Matrix[tl.tensor],
-    members: Members[tl.tensor],
-    geometry: "Annotated[Geometry, tl.constexpr]",
-    block: "Annotated[int, tl.constexpr]",
-) -> None:
-    offs = tl.program_id(0) * block + tl.arange(0, block)
-    live = offs < geometry.clusters
-    source = tl.load(members.order + offs, mask=live, other=0).to(tl.int64)
-    norms = tl.zeros((block,), tl.float32)
-    for base in tl.static_range(0, geometry.padded, geometry.chunk):
-        cols = base + tl.arange(0, geometry.chunk)
+    centroids,
+    centroid_stride,
+    order,
+    members,
+    member_norms,
+    k,
+    D: tl.constexpr,
+    DP: tl.constexpr,
+    DK: tl.constexpr,
+    BLOCK: tl.constexpr,
+):
+    offs = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    live = offs < k
+    source = tl.load(order + offs, mask=live, other=0).to(tl.int64)
+    norms = tl.zeros((BLOCK,), tl.float32)
+    for base in tl.static_range(0, DP, DK):
+        cols = base + tl.arange(0, DK)
         rounded = tl.load(
-            centroids.data + source[:, None] * centroids.stride + cols[None, :],
-            mask=live[:, None] & (cols[None, :] < geometry.dims),
+            centroids + source[:, None] * centroid_stride + cols[None, :],
+            mask=live[:, None] & (cols[None, :] < D),
             other=0.0,
         ).to(tl.bfloat16)
-        tl.store(
-            members.data + offs[:, None].to(tl.int64) * geometry.padded + cols[None, :], rounded, mask=live[:, None]
-        )
+        tl.store(members + offs[:, None].to(tl.int64) * DP + cols[None, :], rounded, mask=live[:, None])
         wide = rounded.to(tl.float32)
         norms += tl.sum(wide * wide, axis=1)
-    tl.store(members.norms + offs, norms, mask=live)
+    tl.store(member_norms + offs, norms, mask=live)
 
 
 @triton.jit
 def _seed(
-    centroids: Matrix[tl.tensor],
-    picks: tl.tensor,
-    centers: Vectors[tl.tensor],
-    geometry: "Annotated[Geometry, tl.constexpr]",
-    block: "Annotated[int, tl.constexpr]",
-) -> None:
-    groups = tl.program_id(0) * block + tl.arange(0, block)
-    live = groups < geometry.groups
+    centroids,
+    centroid_stride,
+    picks,
+    centers,
+    center_norms,
+    G,
+    D: tl.constexpr,
+    DP: tl.constexpr,
+    DK: tl.constexpr,
+    BG: tl.constexpr,
+):
+    groups = tl.program_id(0) * BG + tl.arange(0, BG)
+    live = groups < G
     source = tl.load(picks + groups, mask=live, other=0).to(tl.int64)
-    norms = tl.zeros((block,), tl.float32)
-    for base in tl.static_range(0, geometry.padded, geometry.chunk):
-        cols = base + tl.arange(0, geometry.chunk)
+    norms = tl.zeros((BG,), tl.float32)
+    for base in tl.static_range(0, DP, DK):
+        cols = base + tl.arange(0, DK)
         center = tl.load(
-            centroids.data + source[:, None] * centroids.stride + cols[None, :],
-            mask=live[:, None] & (cols[None, :] < geometry.dims),
+            centroids + source[:, None] * centroid_stride + cols[None, :],
+            mask=live[:, None] & (cols[None, :] < D),
             other=0.0,
         )
-        tl.store(centers.data + groups[:, None] * geometry.padded + cols[None, :], center, mask=live[:, None])
+        tl.store(centers + groups[:, None] * DP + cols[None, :], center, mask=live[:, None])
         norms += tl.sum(center * center, axis=1)
-    tl.store(centers.norms + groups, norms, mask=live)
+    tl.store(center_norms + groups, norms, mask=live)
 
 
 @triton.jit
 def _home(
-    centroids: Matrix[tl.tensor],
-    centers: Vectors[tl.tensor],
-    lloyd: Lloyd[tl.tensor],
-    geometry: "Annotated[Geometry, tl.constexpr]",
-    block: "Annotated[int, tl.constexpr]",
-) -> None:
-    offs = tl.program_id(0) * block + tl.arange(0, block)
-    live = offs < geometry.clusters
-    groups = tl.arange(0, geometry.span)
-    product = tl.load(
-        lloyd.dots + offs[:, None].to(tl.int64) * geometry.span + groups[None, :], mask=live[:, None], other=0.0
-    )
-    home = tl.argmin(tl.load(centers.norms + groups)[None, :] - 2.0 * product, axis=1)
-    tl.store(lloyd.owner + offs, home, mask=live)
-    tl.atomic_add(lloyd.sizes + home, 1, mask=live, sem=RELAXED)
-    for base in tl.static_range(0, geometry.padded, geometry.chunk):
-        cols = base + tl.arange(0, geometry.chunk)
-        inside = live[:, None] & (cols[None, :] < geometry.dims)
-        a = tl.load(
-            centroids.data + offs[:, None].to(tl.int64) * centroids.stride + cols[None, :], mask=inside, other=0.0
-        )
-        tl.atomic_add(lloyd.sums + home[:, None] * geometry.padded + cols[None, :], a, mask=inside, sem=RELAXED)
+    centroids,
+    centroid_stride,
+    k,
+    dots,
+    center_norms,
+    owner,
+    sums,
+    sizes,
+    D: tl.constexpr,
+    DP: tl.constexpr,
+    DK: tl.constexpr,
+    GP: tl.constexpr,
+    BM: tl.constexpr,
+):
+    offs = tl.program_id(0) * BM + tl.arange(0, BM)
+    live = offs < k
+    groups = tl.arange(0, GP)
+    product = tl.load(dots + offs[:, None].to(tl.int64) * GP + groups[None, :], mask=live[:, None], other=0.0)
+    home = tl.argmin(tl.load(center_norms + groups)[None, :] - 2.0 * product, axis=1)
+    tl.store(owner + offs, home, mask=live)
+    tl.atomic_add(sizes + home, 1, mask=live, sem=RELAXED)
+    for base in tl.static_range(0, DP, DK):
+        cols = base + tl.arange(0, DK)
+        inside = live[:, None] & (cols[None, :] < D)
+        a = tl.load(centroids + offs[:, None].to(tl.int64) * centroid_stride + cols[None, :], mask=inside, other=0.0)
+        tl.atomic_add(sums + home[:, None] * DP + cols[None, :], a, mask=inside, sem=RELAXED)
 
 
 @triton.jit
-def _update(
-    centers: Vectors[tl.tensor],
-    lloyd: Lloyd[tl.tensor],
-    geometry: "Annotated[Geometry, tl.constexpr]",
-    block: "Annotated[int, tl.constexpr]",
-) -> None:
-    groups = tl.program_id(0) * block + tl.arange(0, block)
-    live = groups < geometry.groups
-    size = tl.load(lloyd.sizes + groups, mask=live, other=0)
+def _update(centers, center_norms, sums, sizes, G, DP: tl.constexpr, DK: tl.constexpr, BG: tl.constexpr):
+    groups = tl.program_id(0) * BG + tl.arange(0, BG)
+    live = groups < G
+    size = tl.load(sizes + groups, mask=live, other=0)
     occupied = size[:, None] > 0
     scale = tl.maximum(size, 1).to(tl.float32)[:, None]
-    norms = tl.zeros((block,), tl.float32)
-    for base in tl.static_range(0, geometry.padded, geometry.chunk):
-        cells = groups[:, None] * geometry.padded + base + tl.arange(0, geometry.chunk)[None, :]
-        total = tl.load(lloyd.sums + cells, mask=live[:, None], other=0.0)
-        center = tl.where(occupied, total / scale, tl.load(centers.data + cells, mask=live[:, None], other=0.0))
-        tl.store(centers.data + cells, center, mask=live[:, None])
-        tl.store(lloyd.sums + cells, tl.zeros((block, geometry.chunk), tl.float32), mask=live[:, None])
+    norms = tl.zeros((BG,), tl.float32)
+    for base in tl.static_range(0, DP, DK):
+        cells = groups[:, None] * DP + base + tl.arange(0, DK)[None, :]
+        total = tl.load(sums + cells, mask=live[:, None], other=0.0)
+        center = tl.where(occupied, total / scale, tl.load(centers + cells, mask=live[:, None], other=0.0))
+        tl.store(centers + cells, center, mask=live[:, None])
+        tl.store(sums + cells, tl.zeros((BG, DK), tl.float32), mask=live[:, None])
         norms += tl.sum(center * center, axis=1)
-    tl.store(centers.norms + groups, norms, mask=live)
-    tl.store(lloyd.sizes + groups, tl.zeros((block,), tl.int32), mask=live)
+    tl.store(center_norms + groups, norms, mask=live)
+    tl.store(sizes + groups, tl.zeros((BG,), tl.int32), mask=live)
 
 
 @triton.jit
-def _publish(
-    centers: Vectors[tl.tensor],
-    lloyd: Lloyd[tl.tensor],
-    rounded: Vectors[tl.tensor],
-    geometry: "Annotated[Geometry, tl.constexpr]",
-    block: "Annotated[int, tl.constexpr]",
-) -> None:
-    groups = tl.program_id(0) * block + tl.arange(0, block)
-    live = groups < geometry.groups
-    norms = tl.zeros((block,), tl.float32)
-    for base in tl.static_range(0, geometry.padded, geometry.chunk):
-        cells = groups[:, None] * geometry.padded + base + tl.arange(0, geometry.chunk)[None, :]
-        center = tl.load(centers.data + cells, mask=live[:, None], other=0.0).to(tl.bfloat16)
-        tl.store(rounded.data + cells, center, mask=live[:, None])
+def _publish(centers, sizes, rounded, rounded_norms, G, DP: tl.constexpr, DK: tl.constexpr, BG: tl.constexpr):
+    groups = tl.program_id(0) * BG + tl.arange(0, BG)
+    live = groups < G
+    norms = tl.zeros((BG,), tl.float32)
+    for base in tl.static_range(0, DP, DK):
+        cells = groups[:, None] * DP + base + tl.arange(0, DK)[None, :]
+        center = tl.load(centers + cells, mask=live[:, None], other=0.0).to(tl.bfloat16)
+        tl.store(rounded + cells, center, mask=live[:, None])
         wide = center.to(tl.float32)
         norms += tl.sum(wide * wide, axis=1)
-    occupied = tl.load(lloyd.sizes + groups, mask=live, other=0) > 0
-    tl.store(rounded.norms + groups, tl.where(occupied, norms, float("inf")), mask=live)
+    occupied = tl.load(sizes + groups, mask=live, other=0) > 0
+    tl.store(rounded_norms + groups, tl.where(occupied, norms, float("inf")), mask=live)
 
 
 @triton.jit
 def _accumulate(
-    rows: Matrix[tl.tensor],
-    labels: tl.tensor,
-    state: State[tl.tensor],
-    geometry: "Annotated[Geometry, tl.constexpr]",
-    block: "Annotated[int, tl.constexpr]",
-) -> None:
-    offs = tl.program_id(0) * block + tl.arange(0, block)
-    live = offs < rows.rows
+    rows, row_stride, labels, n, sums, counts, D: tl.constexpr, DP: tl.constexpr, DK: tl.constexpr, BM: tl.constexpr
+):
+    offs = tl.program_id(0) * BM + tl.arange(0, BM)
+    live = offs < n
     label = tl.load(labels + offs, mask=live, other=0)
-    tl.atomic_add(state.counts + label, 1.0, mask=live, sem=RELAXED)
-    for base in tl.static_range(0, geometry.padded, geometry.chunk):
-        cols = base + tl.arange(0, geometry.chunk)
-        inside = live[:, None] & (cols[None, :] < geometry.dims)
-        values = tl.load(rows.data + offs[:, None].to(tl.int64) * rows.stride + cols[None, :], mask=inside, other=0.0)
-        cells = label[:, None] * geometry.dims + cols[None, :]
-        tl.atomic_add(state.sums + cells, values.to(tl.float32), mask=inside, sem=RELAXED)
+    tl.atomic_add(counts + label, 1.0, mask=live, sem=RELAXED)
+    for base in tl.static_range(0, DP, DK):
+        cols = base + tl.arange(0, DK)
+        inside = live[:, None] & (cols[None, :] < D)
+        values = tl.load(rows + offs[:, None].to(tl.int64) * row_stride + cols[None, :], mask=inside, other=0.0)
+        tl.atomic_add(sums + label[:, None] * D + cols[None, :], values.to(tl.float32), mask=inside, sem=RELAXED)
 
 
 @triton.jit
 def _ema(
-    state: State[tl.tensor],
-    rate: Rate,
-    mode: "Annotated[Mode, tl.constexpr]",
-    geometry: "Annotated[Geometry, tl.constexpr]",
-    block: "Annotated[int, tl.constexpr]",
-) -> None:
-    offs = tl.program_id(0) * block + tl.arange(0, block)
-    live = offs < geometry.clusters
-    count = tl.load(state.counts + offs, mask=live, other=0.0)
-    old = tl.load(state.usage + offs, mask=live, other=0.0)
-    mass = rate.alpha * count
-    if mode.decays:
-        old = old * rate.keep
+    centroids,
+    usage,
+    sums,
+    counts,
+    pass_sums,
+    pass_counts,
+    k,
+    alpha,
+    keep,
+    D: tl.constexpr,
+    DP: tl.constexpr,
+    DK: tl.constexpr,
+    BM: tl.constexpr,
+    DECAYS: tl.constexpr,
+    LAST: tl.constexpr,
+):
+    offs = tl.program_id(0) * BM + tl.arange(0, BM)
+    live = offs < k
+    count = tl.load(counts + offs, mask=live, other=0.0)
+    old = tl.load(usage + offs, mask=live, other=0.0)
+    mass = alpha * count
+    if DECAYS:
+        old = old * keep
         mass += old
     touched = count > 0
-    weight = tl.where(touched, rate.alpha * count / tl.where(touched, mass, 1.0), 0.0)[:, None]
+    weight = tl.where(touched, alpha * count / tl.where(touched, mass, 1.0), 0.0)[:, None]
     divisor = tl.where(touched, count, 1.0)[:, None]
-    for base in tl.static_range(0, geometry.padded, geometry.chunk):
-        cols = base + tl.arange(0, geometry.chunk)
-        inside = live[:, None] & (cols[None, :] < geometry.dims)
-        cells = offs[:, None].to(tl.int64) * geometry.dims + cols[None, :]
-        total = tl.load(state.sums + cells, mask=inside, other=0.0)
-        center = tl.load(state.centroids + cells, mask=inside, other=0.0)
+    for base in tl.static_range(0, DP, DK):
+        cols = base + tl.arange(0, DK)
+        inside = live[:, None] & (cols[None, :] < D)
+        cells = offs[:, None].to(tl.int64) * D + cols[None, :]
+        total = tl.load(sums + cells, mask=inside, other=0.0)
+        center = tl.load(centroids + cells, mask=inside, other=0.0)
         mean = total / divisor
-        moved = tl.where(weight >= 1.0, mean, center + weight * (mean - center))
-        tl.store(state.centroids + cells, tl.where(touched[:, None], moved, center), mask=inside)
-        if mode.last:
-            tl.store(
-                state.pass_sums + cells, tl.load(state.pass_sums + cells, mask=inside, other=0.0) + total, mask=inside
-            )
-        tl.store(state.sums + cells, tl.zeros((block, geometry.chunk), tl.float32), mask=inside)
-    tl.store(state.usage + offs, tl.where(touched, mass, old), mask=live)
-    if mode.last:
-        tl.store(state.pass_counts + offs, tl.load(state.pass_counts + offs, mask=live, other=0.0) + count, mask=live)
-    tl.store(state.counts + offs, tl.zeros((block,), tl.float32), mask=live)
+        moved = tl.where(weight == 1.0, mean, center + weight * (mean - center))
+        tl.store(centroids + cells, tl.where(touched[:, None], moved, center), mask=inside)
+        if LAST:
+            tl.store(pass_sums + cells, tl.load(pass_sums + cells, mask=inside, other=0.0) + total, mask=inside)
+        tl.store(sums + cells, tl.zeros((BM, DK), tl.float32), mask=inside)
+    tl.store(usage + offs, tl.where(touched, mass, old), mask=live)
+    if LAST:
+        tl.store(pass_counts + offs, tl.load(pass_counts + offs, mask=live, other=0.0) + count, mask=live)
+    tl.store(counts + offs, tl.zeros((BM,), tl.float32), mask=live)
 
 
 def tile(width: int) -> int:
-    return triton.next_power_of_2(max(width, MIN_TILE))
+    return int(triton.next_power_of_2(max(width, MIN_TILE)))
 
 
-def layout(k: int, dims: int, probes: int) -> Geometry:
-    padded, groups = tile(dims), group_count(k)
-    return Geometry(dims, padded, min(DIM_CHUNK, padded), k, groups, tile(groups), probes, MEMBER_TILE)
-
-
-def matrix(data: torch.Tensor) -> Matrix[torch.Tensor]:
-    return Matrix(data, data.stride(0), len(data))
-
-
-def pairs(count: int, geometry: Geometry, device: torch.device) -> Pairs[torch.Tensor]:
-    total = count * geometry.probes
-    flat, span = torch.empty(total, dtype=torch.int32, device=device), geometry.span
-    return Pairs(
-        top=flat,
-        items=torch.empty_like(flat),
-        counts=torch.zeros(span, dtype=torch.int32, device=device),
-        ends=torch.empty(span, dtype=torch.int32, device=device),
-        blocks=torch.empty(span, dtype=torch.int32, device=device),
-        fill=torch.zeros(span, dtype=torch.int32, device=device),
-        value=torch.empty(total, dtype=torch.float32, device=device),
-        ident=torch.empty_like(flat),
-        total=total,
-    )
+def chunk(padded: int) -> int:
+    return min(DIM_CHUNK, padded)
 
 
 def select(
-    rows: Matrix[torch.Tensor], centers: Vectors[torch.Tensor], plan: Pairs[torch.Tensor], geometry: Geometry
+    rows: torch.Tensor,
+    centers: torch.Tensor,
+    center_norms: torch.Tensor,
+    top: torch.Tensor,
+    counts: torch.Tensor,
+    dims: int,
+    probes: int,
 ) -> None:
-    _select[(triton.cdiv(rows.rows, SELECT_ROWS),)](rows, centers, plan, geometry, SELECT_ROWS)
+    n, padded = len(rows), centers.shape[1]
+    _select[(triton.cdiv(n, SELECT_ROWS),)](
+        rows,
+        rows.stride(0),
+        n,
+        centers,
+        center_norms,
+        top,
+        counts,
+        D=dims,
+        DP=padded,
+        DK=chunk(padded),
+        GP=centers.shape[0],
+        BM=SELECT_ROWS,
+        P=probes,
+    )
 
 
-def bucket(plan: Pairs[torch.Tensor], geometry: Geometry) -> None:
-    _plan[(1,)](plan, geometry, PAIR_ROWS)
-    _bucket[(triton.cdiv(plan.total, BUCKET_BLOCK),)](plan, BUCKET_BLOCK)
+def plan(counts: torch.Tensor, ends: torch.Tensor, blocks: torch.Tensor, groups: int, block: int) -> None:
+    _plan[(1,)](counts, ends, blocks, groups, GP=tile(groups), BM=block)
+
+
+def bucket(keys: torch.Tensor, ends: torch.Tensor, counts: torch.Tensor, fill: torch.Tensor, out: torch.Tensor) -> None:
+    m = len(keys)
+    _bucket[(triton.cdiv(m, BUCKET_BLOCK),)](keys, m, ends, counts, fill, out, BLOCK=BUCKET_BLOCK)
 
 
 def member(
-    rows: Matrix[torch.Tensor], plan: Pairs[torch.Tensor], members: Members[torch.Tensor], geometry: Geometry
+    rows: torch.Tensor,
+    items: torch.Tensor,
+    members: torch.Tensor,
+    member_norms: torch.Tensor,
+    order: torch.Tensor,
+    group_ends: torch.Tensor,
+    group_sizes: torch.Tensor,
+    pair_ends: torch.Tensor,
+    pair_counts: torch.Tensor,
+    pair_blocks: torch.Tensor,
+    value: torch.Tensor,
+    ident: torch.Tensor,
+    dims: int,
+    groups: int,
+    probes: int,
 ) -> None:
-    _member[(triton.cdiv(plan.total, PAIR_ROWS) + geometry.groups,)](rows, plan, members, geometry, PAIR_ROWS)
+    padded = members.shape[1]
+    _member[(triton.cdiv(len(items), PAIR_ROWS) + groups,)](
+        rows,
+        rows.stride(0),
+        items,
+        members,
+        member_norms,
+        order,
+        group_ends,
+        group_sizes,
+        pair_ends,
+        pair_counts,
+        pair_blocks,
+        groups,
+        value,
+        ident,
+        D=dims,
+        DP=padded,
+        DK=chunk(padded),
+        GP=tile(groups),
+        BM=PAIR_ROWS,
+        BN=MEMBER_TILE,
+        P=probes,
+    )
 
 
-def reduce(plan: Pairs[torch.Tensor], labels: torch.Tensor, geometry: Geometry) -> None:
-    count = len(labels)
-    _reduce[(triton.cdiv(count, REDUCE_BLOCK),)](plan, labels, count, geometry, REDUCE_BLOCK)
+def reduce(value: torch.Tensor, ident: torch.Tensor, labels: torch.Tensor, probes: int) -> None:
+    n = len(labels)
+    _reduce[(triton.cdiv(n, REDUCE_BLOCK),)](value, ident, n, labels, P=probes, BLOCK=REDUCE_BLOCK)
 
 
-def refresh(centroids: Matrix[torch.Tensor], members: Members[torch.Tensor], geometry: Geometry) -> None:
-    _refresh[(triton.cdiv(geometry.clusters, REFRESH_ROWS),)](centroids, members, geometry, REFRESH_ROWS)
+def refresh(
+    centroids: torch.Tensor, order: torch.Tensor, members: torch.Tensor, member_norms: torch.Tensor, dims: int
+) -> None:
+    k, padded = len(order), members.shape[1]
+    _refresh[(triton.cdiv(k, REFRESH_ROWS),)](
+        centroids,
+        centroids.stride(0),
+        order,
+        members,
+        member_norms,
+        k,
+        D=dims,
+        DP=padded,
+        DK=chunk(padded),
+        BLOCK=REFRESH_ROWS,
+    )
 
 
 def seed(
-    centroids: Matrix[torch.Tensor], picks: torch.Tensor, centers: Vectors[torch.Tensor], geometry: Geometry
+    centroids: torch.Tensor, picks: torch.Tensor, centers: torch.Tensor, center_norms: torch.Tensor, dims: int
 ) -> None:
-    _seed[(triton.cdiv(geometry.groups, GROUP_BLOCK),)](centroids, picks, centers, geometry, GROUP_BLOCK)
+    groups, padded = len(picks), centers.shape[1]
+    _seed[(triton.cdiv(groups, GROUP_BLOCK),)](
+        centroids,
+        centroids.stride(0),
+        picks,
+        centers,
+        center_norms,
+        groups,
+        D=dims,
+        DP=padded,
+        DK=chunk(padded),
+        BG=GROUP_BLOCK,
+    )
 
 
-def home(
-    centroids: Matrix[torch.Tensor], centers: Vectors[torch.Tensor], lloyd: Lloyd[torch.Tensor], geometry: Geometry
+def lloyd(
+    centroids: torch.Tensor,
+    centers: torch.Tensor,
+    center_norms: torch.Tensor,
+    dots: torch.Tensor,
+    owner: torch.Tensor,
+    sums: torch.Tensor,
+    sizes: torch.Tensor,
+    dims: int,
 ) -> None:
-    dims = geometry.dims
-    torch.mm(centroids.data[:, :dims], centers.data[:, :dims].T, out=lloyd.dots)
-    _home[(triton.cdiv(geometry.clusters, LLOYD_ROWS),)](centroids, centers, lloyd, geometry, LLOYD_ROWS)
+    k, padded, span = len(centroids), centers.shape[1], centers.shape[0]
+    torch.mm(centroids[:, :dims], centers[:, :dims].T, out=dots)
+    _home[(triton.cdiv(k, LLOYD_ROWS),)](
+        centroids,
+        centroids.stride(0),
+        k,
+        dots,
+        center_norms,
+        owner,
+        sums,
+        sizes,
+        D=dims,
+        DP=padded,
+        DK=chunk(padded),
+        GP=span,
+        BM=LLOYD_ROWS,
+    )
 
 
-def update(centers: Vectors[torch.Tensor], lloyd: Lloyd[torch.Tensor], geometry: Geometry) -> None:
-    _update[(triton.cdiv(geometry.groups, GROUP_BLOCK),)](centers, lloyd, geometry, GROUP_BLOCK)
+def update(
+    centers: torch.Tensor, center_norms: torch.Tensor, sums: torch.Tensor, sizes: torch.Tensor, groups: int
+) -> None:
+    padded = centers.shape[1]
+    _update[(triton.cdiv(groups, GROUP_BLOCK),)](
+        centers,
+        center_norms,
+        sums,
+        sizes,
+        groups,
+        DP=padded,
+        DK=chunk(padded),
+        BG=GROUP_BLOCK,
+    )
 
 
 def publish(
-    centers: Vectors[torch.Tensor], lloyd: Lloyd[torch.Tensor], rounded: Vectors[torch.Tensor], geometry: Geometry
+    centers: torch.Tensor, sizes: torch.Tensor, rounded: torch.Tensor, rounded_norms: torch.Tensor, groups: int
 ) -> None:
-    _publish[(triton.cdiv(geometry.groups, GROUP_BLOCK),)](centers, lloyd, rounded, geometry, GROUP_BLOCK)
+    padded = centers.shape[1]
+    _publish[(triton.cdiv(groups, GROUP_BLOCK),)](
+        centers,
+        sizes,
+        rounded,
+        rounded_norms,
+        groups,
+        DP=padded,
+        DK=chunk(padded),
+        BG=GROUP_BLOCK,
+    )
 
 
-def accumulate(
-    rows: Matrix[torch.Tensor], labels: torch.Tensor, state: State[torch.Tensor], geometry: Geometry
+def accumulate(rows: torch.Tensor, labels: torch.Tensor, sums: torch.Tensor, counts: torch.Tensor) -> None:
+    n, dims = len(rows), sums.shape[1]
+    padded = tile(dims)
+    _accumulate[(triton.cdiv(n, ACCUMULATE_ROWS),)](
+        rows, rows.stride(0), labels, n, sums, counts, D=dims, DP=padded, DK=chunk(padded), BM=ACCUMULATE_ROWS
+    )
+
+
+def ema(
+    centroids: torch.Tensor,
+    usage: torch.Tensor,
+    sums: torch.Tensor,
+    counts: torch.Tensor,
+    passes: tuple[torch.Tensor, torch.Tensor],
+    alpha: float,
+    last: bool,
 ) -> None:
-    _accumulate[(triton.cdiv(rows.rows, ACCUMULATE_ROWS),)](rows, labels, state, geometry, ACCUMULATE_ROWS)
-
-
-def ema(state: State[torch.Tensor], rate: Rate, mode: Mode, geometry: Geometry) -> None:
-    _ema[(triton.cdiv(geometry.clusters, EMA_ROWS),)](state, rate, mode, geometry, EMA_ROWS)
+    k, dims = centroids.shape
+    padded = tile(dims)
+    _ema[(triton.cdiv(k, EMA_ROWS),)](
+        centroids,
+        usage,
+        sums,
+        counts,
+        *passes,
+        k,
+        alpha,
+        1.0 - alpha,
+        D=dims,
+        DP=padded,
+        DK=chunk(padded),
+        BM=EMA_ROWS,
+        DECAYS=alpha != 1.0,
+        LAST=last,
+    )
