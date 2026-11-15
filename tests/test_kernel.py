@@ -3,11 +3,13 @@ import os
 import subprocess
 import sys
 from collections.abc import Callable
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from ezmeans import kernel
+from ezmeans.config import KERNEL_COMPILE, KERNEL_SOURCE
 from ezmeans.kernel import KernelError, KernelStatus, Labels, Matrix
 from ezmeans.recipe import group_count, law_recipe
 from ezmeans.trainer import ez_means
@@ -34,6 +36,17 @@ centroids = ez_means(x, {CLUSTERS}, law_recipe(len(x), {CLUSTERS}, {EPOCHS}, {SE
 sys.stdout.write(hashlib.sha256(centroids.tobytes()).hexdigest())
 """
 BLOCK_FAISS = 'import sys\nsys.modules["faiss"] = None\n'
+STRICT_WARNINGS = (
+    "-Wpedantic",
+    "-Wshadow",
+    "-Wconversion",
+    "-Wsign-conversion",
+    "-Wcast-qual",
+    "-Wdouble-promotion",
+    "-Werror",
+    "-c",
+)
+OBJECT_SUFFIX = ".o"
 
 
 def points(dims: int) -> Matrix:
@@ -140,3 +153,10 @@ def test_centroids_do_not_depend_on_thread_count() -> None:
 
 def test_cpu_training_runs_without_faiss() -> None:
     subprocess.run([sys.executable, "-c", BLOCK_FAISS + TRAIN_SCRIPT], capture_output=True, check=True)
+
+
+def test_kernel_compiles_without_strict_warnings(tmp_path: Path) -> None:
+    output = tmp_path / KERNEL_SOURCE.with_suffix(OBJECT_SUFFIX).name
+    command = [*KERNEL_COMPILE, *STRICT_WARNINGS, str(KERNEL_SOURCE), "-o", str(output)]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr

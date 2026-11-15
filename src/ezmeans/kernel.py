@@ -56,7 +56,7 @@ def build() -> Path:
         os.close(handle)
         try:
             subprocess.run([*KERNEL_COMPILE, str(KERNEL_SOURCE), "-o", temporary], check=True)
-            os.replace(temporary, path)
+            Path(temporary).replace(path)
         finally:
             Path(temporary).unlink(missing_ok=True)
     return path

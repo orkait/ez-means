@@ -319,7 +319,7 @@ static int regroup(const float *centroids, int64_t k, int64_t dims, const Settin
         for (int64_t c = 0; c < k; c++) {
             sizes[homes[c]]++;
             for (int64_t j = 0; j < dims; j++)
-                sums[homes[c] * dims + j] += centroids[c * dims + j];
+                sums[homes[c] * dims + j] += (double)centroids[c * dims + j];
         }
         for (int64_t g = 0; g < group_count; g++)
             if (sizes[g] > 0)
@@ -380,7 +380,7 @@ static int revive(float *centroids, float *usage, int64_t k, int64_t dims, const
 {
     double total = 0.0;
     for (int64_t c = 0; c < k; c++)
-        total += usage[c];
+        total += (double)usage[c];
     const float threshold = (float)total * (float)settings->tau / (float)k;
     int64_t unused = 0, donors = 0;
     for (int64_t c = 0; c < k; c++) {
@@ -400,7 +400,7 @@ static int revive(float *centroids, float *usage, int64_t k, int64_t dims, const
     for (int64_t c = 0, found = 0; c < k; c++) {
         const double draw = fmax((double)(next(state) >> 11) * UNIT, DBL_MIN);
         const int spare = usage[c] < threshold;
-        ranked[c] = (Ranked){!spare && usage[c] > 0.0f ? log((double)usage[c]) - log(-log(draw)) : -INFINITY, c};
+        ranked[c] = (Ranked){!spare && usage[c] > 0.0f ? log((double)usage[c]) - log(-log(draw)) : -HUGE_VAL, c};
         if (spare && found < count)
             targets[found++] = c;
     }
@@ -516,7 +516,7 @@ int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *pla
             update(centroids, usage, sums, counts, k, width, scheduled(settings, step, steps));
             if (last) {
                 for (int64_t c = 0; c < k; c++)
-                    pass_counts[c] += counts[c];
+                    pass_counts[c] += (double)counts[c];
                 for (size_t i = 0; i < table; i++)
                     pass_sums[i] += sums[i];
             }

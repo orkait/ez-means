@@ -3,7 +3,7 @@ from collections.abc import Callable
 
 import pytest
 
-from ezmeans.recipe import default_probes, law_recipe
+from ezmeans.recipe import RecipeError, RecipeFault, default_probes, law_recipe
 
 ROWS = 4096
 CLUSTERS = 256
@@ -13,15 +13,15 @@ BATCH_LAW = "throughput"
 
 
 @pytest.mark.parametrize(
-    "call",
+    ("call", "fault"),
     [
-        lambda: dataclasses.replace(law_recipe(ROWS, CLUSTERS, EPOCHS, SEED), epochs=0.0),
-        lambda: dataclasses.replace(law_recipe(ROWS, CLUSTERS, EPOCHS, SEED), epochs=-0.5),
-        lambda: dataclasses.replace(law_recipe(ROWS, CLUSTERS, EPOCHS, SEED), alpha0=0.0),
-        lambda: dataclasses.replace(law_recipe(ROWS, CLUSTERS, EPOCHS, SEED), alpha0=1.5),
-        lambda: law_recipe(0, CLUSTERS, EPOCHS, SEED),
-        lambda: law_recipe(ROWS, 0, EPOCHS, SEED),
-        lambda: law_recipe(ROWS, CLUSTERS, -0.5, SEED),
+        (lambda: dataclasses.replace(law_recipe(ROWS, CLUSTERS, EPOCHS, SEED), epochs=0.0), RecipeFault.EPOCHS),
+        (lambda: dataclasses.replace(law_recipe(ROWS, CLUSTERS, EPOCHS, SEED), epochs=-0.5), RecipeFault.EPOCHS),
+        (lambda: dataclasses.replace(law_recipe(ROWS, CLUSTERS, EPOCHS, SEED), alpha0=0.0), RecipeFault.STEP),
+        (lambda: dataclasses.replace(law_recipe(ROWS, CLUSTERS, EPOCHS, SEED), alpha0=1.5), RecipeFault.STEP),
+        (lambda: law_recipe(0, CLUSTERS, EPOCHS, SEED), RecipeFault.LAW_DOMAIN),
+        (lambda: law_recipe(ROWS, 0, EPOCHS, SEED), RecipeFault.LAW_DOMAIN),
+        (lambda: law_recipe(ROWS, CLUSTERS, -0.5, SEED), RecipeFault.LAW_DOMAIN),
     ],
     ids=[
         "zero epochs",
@@ -33,9 +33,10 @@ BATCH_LAW = "throughput"
         "negative law epochs",
     ],
 )
-def test_recipe_rejects_impossible_values(call: Callable[[], object]) -> None:
-    with pytest.raises(ValueError):
+def test_recipe_rejects_impossible_values(call: Callable[[], object], fault: RecipeFault) -> None:
+    with pytest.raises(RecipeError) as raised:
         call()
+    assert raised.value.fault is fault
 
 
 @pytest.mark.parametrize(

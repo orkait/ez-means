@@ -1,5 +1,6 @@
 import math
 from dataclasses import dataclass
+from enum import Enum
 
 REVIVAL_THRESHOLD = 0.1
 INIT_USAGE = 2.0**-16
@@ -15,6 +16,18 @@ MIN_PROBES = 4
 GROUPS_PER_PROBE = 16
 
 
+class RecipeFault(Enum):
+    EPOCHS = "epochs must be positive"
+    STEP = "alpha0 must be in (0, 1]"
+    LAW_DOMAIN = "the scaling law needs n >= 1, k >= 1 and epochs > 0"
+
+
+class RecipeError(ValueError):
+    def __init__(self, fault: RecipeFault) -> None:
+        super().__init__(fault.value)
+        self.fault = fault
+
+
 @dataclass(frozen=True)
 class Recipe:
     epochs: float
@@ -25,9 +38,9 @@ class Recipe:
 
     def __post_init__(self) -> None:
         if not self.epochs > 0:
-            raise ValueError(f"epochs must be positive, got {self.epochs}")
+            raise RecipeError(RecipeFault.EPOCHS)
         if not 0 < self.alpha0 <= MAX_ALPHA0:
-            raise ValueError(f"alpha0 must be in (0, {MAX_ALPHA0}], got {self.alpha0}")
+            raise RecipeError(RecipeFault.STEP)
 
 
 def group_count(k: int) -> int:
@@ -57,7 +70,7 @@ def nearest_power_of_two(value: float) -> int:
 
 def law_recipe(n: int, k: int, epochs: float, seed: int) -> Recipe:
     if n < 1 or k < 1 or not epochs > 0:
-        raise ValueError(f"the scaling law needs n >= 1, k >= 1 and epochs > 0, got n={n}, k={k}, epochs={epochs}")
+        raise RecipeError(RecipeFault.LAW_DOMAIN)
     rate, k_power, n_power, epochs_power = BATCH_LAW
     law_batch = nearest_power_of_two(rate * k**k_power * n**n_power * epochs**epochs_power)
     batch = max(1, min(law_batch, nearest_power_of_two(n / 2), n))
