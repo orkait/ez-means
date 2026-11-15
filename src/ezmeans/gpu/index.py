@@ -3,8 +3,9 @@ from enum import Enum
 import torch
 
 from ezmeans.gpu import kernels
-from ezmeans.gpu.constants import CUDA, MATRIX_RANK, MAX_GROUP_SPAN, PAIR_ROWS
-from ezmeans.recipe import GROUP_ITERATIONS, group_count
+from ezmeans.gpu.constants import CUDA, MATRIX_RANK, MAX_GROUP_SPAN
+from ezmeans.gpu.kernels import Lloyd, Members, Vectors
+from ezmeans.recipe import GROUP_ITERATIONS
 
 
 class Fault(Enum):
@@ -39,95 +40,72 @@ def resolve(device: torch.device | None) -> torch.device:
 class GroupIndex:
     def __init__(self, k: int, dims: int, probes: int, seed: int, device: torch.device | None = None) -> None:
         self.device = resolve(device)
-        self.k = k
-        self.dims = dims
-        self.groups = group_count(k)
-        self.probes = probes
-        span = kernels.tile(self.groups)
+        self.geometry = kernels.layout(k, dims, probes)
+        groups, span, padded = self.geometry.groups, self.geometry.span, self.geometry.padded
         if span > MAX_GROUP_SPAN:
             raise GpuInputError(Fault.TOO_MANY_GROUPS)
-        if not 1 <= probes <= self.groups:
+        if not 1 <= probes <= groups:
             raise GpuInputError(Fault.BAD_PROBES)
-        padded = kernels.tile(dims)
-        picks = torch.randperm(k, generator=torch.Generator().manual_seed(seed))[: self.groups]
+        picks = torch.randperm(k, generator=torch.Generator().manual_seed(seed))[:groups]
         self.picks = picks.to(device=self.device, dtype=torch.int32)
-        self.centers = torch.zeros((span, padded), dtype=torch.float32, device=self.device)
-        self.center_norms = torch.full((span,), float("inf"), dtype=torch.float32, device=self.device)
-        self.sums = torch.zeros((span, padded), dtype=torch.float32, device=self.device)
-        self.sizes = torch.zeros(span, dtype=torch.int32, device=self.device)
-        self.owner = torch.zeros(k, dtype=torch.int32, device=self.device)
-        self.dots = torch.zeros((k, span), dtype=torch.float32, device=self.device)
-        self.rounded = torch.zeros((span, padded), dtype=torch.bfloat16, device=self.device)
-        self.rounded_norms = torch.full((span,), float("inf"), dtype=torch.float32, device=self.device)
-        self.group_ends = torch.zeros(span, dtype=torch.int32, device=self.device)
-        self.fill = torch.zeros(span, dtype=torch.int32, device=self.device)
-        self.order = torch.zeros(k, dtype=torch.int32, device=self.device)
-        self.members = torch.zeros((k, padded), dtype=torch.bfloat16, device=self.device)
-        self.member_norms = torch.zeros(k, dtype=torch.float32, device=self.device)
+        self.centers = self.vectors(span, padded, torch.float32)
+        self.rounded = self.vectors(span, padded, torch.bfloat16)
+        sizes = torch.zeros(span, dtype=torch.int32, device=self.device)
+        self.lloyd = Lloyd(
+            dots=torch.zeros((k, span), dtype=torch.float32, device=self.device),
+            owner=torch.zeros(k, dtype=torch.int32, device=self.device),
+            sums=torch.zeros((span, padded), dtype=torch.float32, device=self.device),
+            sizes=sizes,
+        )
+        self.members = Members(
+            data=torch.zeros((k, padded), dtype=torch.bfloat16, device=self.device),
+            norms=torch.zeros(k, dtype=torch.float32, device=self.device),
+            order=torch.zeros(k, dtype=torch.int32, device=self.device),
+            ends=torch.zeros(span, dtype=torch.int32, device=self.device),
+            sizes=sizes,
+        )
         self.grouped = False
 
+    def vectors(self, count: int, width: int, dtype: torch.dtype) -> Vectors[torch.Tensor]:
+        return Vectors(
+            torch.zeros((count, width), dtype=dtype, device=self.device),
+            torch.full((count,), float("inf"), dtype=torch.float32, device=self.device),
+        )
+
     def regroup(self, centroids: torch.Tensor) -> None:
-        self.check(centroids, torch.float32, self.k)
+        self.check(centroids, torch.float32, self.geometry.clusters)
+        matrix = kernels.matrix(centroids)
         with torch.cuda.device(self.device):
-            self.sums.zero_()
-            self.sizes.zero_()
-            kernels.seed(centroids, self.picks, self.centers, self.center_norms, self.dims)
+            self.lloyd.sums.zero_()
+            self.lloyd.sizes.zero_()
+            kernels.seed(matrix, self.picks, self.centers, self.geometry)
             for iteration in range(GROUP_ITERATIONS + 1):
-                kernels.lloyd(
-                    centroids, self.centers, self.center_norms, self.dots, self.owner, self.sums, self.sizes, self.dims
-                )
+                kernels.home(matrix, self.centers, self.lloyd, self.geometry)
                 if iteration < GROUP_ITERATIONS:
-                    kernels.update(self.centers, self.center_norms, self.sums, self.sizes, self.groups)
-            torch.cumsum(self.sizes, 0, dtype=torch.int32, out=self.group_ends)
-            self.fill.zero_()
-            kernels.bucket(self.owner, self.group_ends, self.sizes, self.fill, self.order)
-            kernels.publish(self.centers, self.sizes, self.rounded, self.rounded_norms, self.groups)
+                    kernels.update(self.centers, self.lloyd, self.geometry)
+            torch.cumsum(self.lloyd.sizes, 0, dtype=torch.int32, out=self.members.ends)
+            self.members.order.copy_(torch.argsort(self.lloyd.owner, stable=True))
+            kernels.publish(self.centers, self.lloyd, self.rounded, self.geometry)
         self.grouped = True
 
     def refresh(self, centroids: torch.Tensor) -> None:
-        self.check(centroids, torch.float32, self.k)
+        self.check(centroids, torch.float32, self.geometry.clusters)
         self.require_groups()
         with torch.cuda.device(self.device):
-            kernels.refresh(centroids, self.order, self.members, self.member_norms, self.dims)
+            kernels.refresh(kernels.matrix(centroids), self.members, self.geometry)
 
     def assign(self, rows: torch.Tensor) -> torch.Tensor:
         self.check(rows, torch.bfloat16, None)
         self.require_groups()
-        n, span = len(rows), len(self.sizes)
-        pairs = n * self.probes
-        labels = torch.empty(n, dtype=torch.int64, device=self.device)
-        if n == 0:
+        labels = torch.empty(len(rows), dtype=torch.int64, device=self.device)
+        if len(rows) == 0:
             return labels
-        counts = torch.zeros(span, dtype=torch.int32, device=self.device)
-        fill = torch.zeros(span, dtype=torch.int32, device=self.device)
-        ends = torch.empty(span, dtype=torch.int32, device=self.device)
-        blocks = torch.empty(span, dtype=torch.int32, device=self.device)
-        top = torch.empty(pairs, dtype=torch.int32, device=self.device)
-        items = torch.empty(pairs, dtype=torch.int32, device=self.device)
-        value = torch.empty(pairs, dtype=torch.float32, device=self.device)
-        ident = torch.empty(pairs, dtype=torch.int32, device=self.device)
+        matrix, plan = kernels.matrix(rows), kernels.pairs(len(rows), self.geometry, self.device)
         with torch.cuda.device(self.device):
-            kernels.select(rows, self.rounded, self.rounded_norms, top, counts, self.dims, self.probes)
-            kernels.plan(counts, ends, blocks, self.groups, PAIR_ROWS)
-            kernels.bucket(top, ends, counts, fill, items)
-            kernels.member(
-                rows,
-                items,
-                self.members,
-                self.member_norms,
-                self.order,
-                self.group_ends,
-                self.sizes,
-                ends,
-                counts,
-                blocks,
-                value,
-                ident,
-                self.dims,
-                self.groups,
-                self.probes,
-            )
-            kernels.reduce(value, ident, labels, self.probes)
+            kernels.select(matrix, self.rounded, plan, self.geometry)
+            kernels.bucket(plan, self.geometry)
+            kernels.member(matrix, plan, self.members, self.geometry)
+            kernels.reduce(plan, labels, self.geometry)
         return labels
 
     def check(self, tensor: torch.Tensor, dtype: torch.dtype, rows: int | None) -> None:
@@ -137,7 +115,7 @@ class GroupIndex:
             raise GpuInputError(Fault.WRONG_DEVICE)
         if tensor.dtype != dtype:
             raise GpuInputError(Fault.WRONG_DTYPE)
-        if tensor.dim() != MATRIX_RANK or tensor.shape[1] < self.dims:
+        if tensor.dim() != MATRIX_RANK or tensor.shape[1] < self.geometry.dims:
             raise GpuInputError(Fault.WRONG_SHAPE)
         if rows is not None and tensor.shape[0] != rows:
             raise GpuInputError(Fault.WRONG_SHAPE)

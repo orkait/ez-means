@@ -13,7 +13,7 @@ dependencies = ["numpy>=2.1"]
 gpu = ["torch>=2.15", "triton>=3.9"]
 
 [dependency-groups]
-dev = ["ruff", "mypy", "pytest", "faiss-cpu>=1.16"]
+dev = ["ruff", "mypy", "pytest", "faiss-cpu>=1.16", "torch>=2.15", "triton>=3.9"]
 
 [build-system]
 requires = ["hatchling"]
@@ -30,10 +30,4 @@ known-first-party = ["ezmeans"]
 
 [tool.mypy]
 strict = true
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = ["ezmeans.gpu.kernels"]
-disallow_untyped_defs = false
-disallow_incomplete_defs = false
-disallow_untyped_decorators = false
+mypy_path = "stubs"

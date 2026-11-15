@@ -5,6 +5,7 @@ import torch
 from ezmeans.gpu import kernels
 from ezmeans.gpu.constants import MAX_ROW_NORM
 from ezmeans.gpu.index import Fault, GpuInputError, GroupIndex
+from ezmeans.gpu.kernels import Mode, Rate, State
 from ezmeans.recipe import ALPHA_MIN_FACTOR, CHECK_EVERY, INIT_USAGE, SPLIT_EPSILON, Recipe, default_probes, epoch_rows
 
 
@@ -43,8 +44,14 @@ def train(x: torch.Tensor, k: int, recipe: Recipe, probes: int | None = None) ->
     generator = torch.Generator(index.device).manual_seed(recipe.seed)
     centroids = x[torch.randperm(n, generator=generator, device=index.device)[:k]].float()
     usage = torch.full((k,), INIT_USAGE, device=index.device)
-    sums, counts = torch.zeros_like(centroids), torch.zeros_like(usage)
-    pass_sums, pass_counts = torch.zeros_like(centroids), torch.zeros_like(usage)
+    state = State(
+        centroids=centroids,
+        usage=usage,
+        sums=torch.zeros_like(centroids),
+        counts=torch.zeros_like(usage),
+        pass_sums=torch.zeros_like(centroids),
+        pass_counts=torch.zeros_like(usage),
+    )
     total = sum(math.ceil(rows / recipe.batch) for rows in plan)
     step = 0
     with torch.cuda.device(index.device):
@@ -55,10 +62,12 @@ def train(x: torch.Tensor, k: int, recipe: Recipe, probes: int | None = None) ->
                 if step % CHECK_EVERY == 0:
                     index.regroup(centroids)
                 index.refresh(centroids)
-                kernels.accumulate(batch, index.assign(batch), sums, counts)
+                kernels.accumulate(kernels.matrix(batch), index.assign(batch), state, index.geometry)
                 alpha = scheduled(recipe, step, total)
-                kernels.ema(centroids, usage, sums, counts, (pass_sums, pass_counts), alpha, epoch == len(plan) - 1)
+                mode = Mode(decays=alpha != 1.0, last=epoch == len(plan) - 1)
+                kernels.ema(state, Rate(alpha, 1.0 - alpha), mode, index.geometry)
                 if (step + 1) % CHECK_EVERY == 0:
                     revive(centroids, usage, recipe, generator)
                 step += 1
-    return torch.where((pass_counts > 0)[:, None], pass_sums / pass_counts.clamp(min=1)[:, None], centroids)
+    passes = state.pass_counts.clamp(min=1)[:, None]
+    return torch.where((state.pass_counts > 0)[:, None], state.pass_sums / passes, centroids)
