@@ -157,7 +157,7 @@ class GroupedBackend(TritonBackend):
         self.centers = torch.zeros((self.span, self.padded), device=device, dtype=torch.bfloat16)
         self.centers[: self.groups, : self.d] = g
         self.center_norms = torch.full((self.span,), float("inf"), device=device)
-        self.center_norms[: self.groups] = (g**2).sum(1)
+        self.center_norms[: self.groups] = (self.centers[: self.groups].float() ** 2).sum(1)
         self.members = torch.zeros((self.groups, self.width, self.padded), device=device, dtype=torch.bfloat16)
 
     def prepare_centroids(
@@ -167,9 +167,8 @@ class GroupedBackend(TritonBackend):
         if self.batches % CHECK_EVERY == 0:
             self.regroup(c)
         self.batches += 1
-        picked = c[self.gather]
-        self.members[:, :, : self.d] = picked
-        self.norms = torch.where(self.valid, (picked**2).sum(-1), float("inf"))
+        self.members[:, :, : self.d] = c[self.gather]
+        self.norms = torch.where(self.valid, (self.members.float() ** 2).sum(-1), float("inf"))
         prepared: tuple[torch.Tensor, torch.Tensor] = super().prepare_centroids(centroids, dtype, spherical)
         return prepared
 
