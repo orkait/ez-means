@@ -54,6 +54,10 @@ BFLOAT16_ROUNDING = 0x7FFF
 BFLOAT16_MASK = 0xFFFF0000
 
 
+def group_count(k: int) -> int:
+    return max(1, round(math.sqrt(k)))
+
+
 def bfloat16(values: Floats) -> Floats:
     bits = np.ascontiguousarray(values, dtype=np.float32).view(np.uint32)
     rounded = (bits + (BFLOAT16_ROUNDING + ((bits >> 16) & 1))) & BFLOAT16_MASK
@@ -169,7 +173,7 @@ class Emeans:
                 return found, labels
             case Assignment.INDEXED:
                 d = centroids.shape[1]
-                lists = max(1, round(math.sqrt(self.k)))
+                lists = group_count(self.k)
                 coarse = faiss.IndexFlatIP(d) if kind == faiss.METRIC_INNER_PRODUCT else faiss.IndexFlatL2(d)
                 index = faiss.IndexIVFFlat(coarse, d, lists, kind)
                 index.cp.min_points_per_centroid = 1
@@ -198,7 +202,7 @@ class Emeans:
         return best[:, None], labels[:, None]
 
     def regroup(self, centroids: Floats, kind: int) -> None:
-        lists = max(1, round(math.sqrt(self.k)))
+        lists = group_count(self.k)
         kmeans = faiss.Kmeans(
             centroids.shape[1],
             lists,

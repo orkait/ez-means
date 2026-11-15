@@ -37,9 +37,12 @@ ignore_missing_imports = true
 untyped_calls_exclude = ["faiss", "sklearn", "scipy"]
 
 [[tool.mypy.overrides]]
-module = ["gpu"]
+module = ["ezmeans.gpu.kernels"]
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
-disallow_untyped_calls = false
 disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+module = ["ezmeans.gpu.backend"]
 disallow_subclassing_any = false
+disallow_untyped_calls = false
