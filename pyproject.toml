@@ -1,21 +1,17 @@
 [project]
 name = "ezmeans"
 version = "0.0.1"
-description = "ez-means: faster e-means clustering on CPU"
+description = "ez-means: faster e-means clustering on CPU and GPU"
 license = "MIT"
 authors = [{ name = "Kailas Mahavarkar" }]
 requires-python = ">=3.13"
 dependencies = [
     "numpy==2.5.4",
     "faiss-cpu==1.16.0",
-    "scipy==1.18.1",
-    "scikit-learn==1.9.1",
-    "h5py==3.16.0",
 ]
 
 [dependency-groups]
 dev = ["ruff", "mypy", "pytest"]
-cloud = ["modal==1.6.2"]
 gpu = ["torch==2.15.0", "triton==3.9.0"]
 
 [build-system]
@@ -34,7 +30,7 @@ known-first-party = ["ezmeans"]
 [tool.mypy]
 strict = true
 ignore_missing_imports = true
-untyped_calls_exclude = ["faiss", "sklearn", "scipy"]
+untyped_calls_exclude = ["faiss"]
 
 [[tool.mypy.overrides]]
 module = ["ezmeans.gpu.kernels"]

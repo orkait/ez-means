@@ -3,9 +3,12 @@ import functools
 import subprocess
 
 import numpy as np
+import numpy.typing as npt
 
 from ezmeans.config import KERNEL_COMPILE, KERNEL_LIBRARY, KERNEL_SOURCE
-from ezmeans.dataset import Labels, Matrix
+
+Matrix = npt.NDArray[np.float32]
+Labels = npt.NDArray[np.int64]
 
 DONE = 0
 FLOATS = np.ctypeslib.ndpointer(np.float32, flags="C_CONTIGUOUS")
@@ -64,8 +67,6 @@ class Settings(ctypes.Structure):
         ("tau", ctypes.c_double),
         ("init_usage", ctypes.c_double),
         ("split_epsilon", ctypes.c_double),
-        ("ad_epsilon", ctypes.c_double),
-        ("screen_epsilon", ctypes.c_double),
     ]
 
 

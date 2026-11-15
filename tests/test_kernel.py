@@ -1,5 +1,4 @@
 import hashlib
-import math
 import os
 import subprocess
 import sys
@@ -9,8 +8,8 @@ import numpy as np
 import pytest
 
 from ezmeans import kernel
-from ezmeans.dataset import Matrix
-from ezmeans.reference import Assignment, Emeans, Metric, Revival, law_recipe
+from ezmeans.kernel import Matrix
+from ezmeans.recipe import group_count, law_recipe
 from ezmeans.trainer import ez_means
 
 ROWS = 4096
@@ -22,7 +21,7 @@ THREAD_COUNTS = ("1", "4")
 DETERMINISM_SCRIPT = """
 import hashlib, sys
 import numpy as np
-from ezmeans.reference import law_recipe
+from ezmeans.recipe import law_recipe
 from ezmeans.trainer import ez_means
 x = np.random.default_rng(0).standard_normal((4096, 48)).astype(np.float32)
 centroids, _ = ez_means(x, 256, law_recipe(len(x), 256, 2, 0), 4)
@@ -38,18 +37,10 @@ def points(dims: int) -> Matrix:
 def test_probing_every_group_is_brute_force(dims: int) -> None:
     x = points(dims)
     centroids = np.ascontiguousarray(x[:CLUSTERS])
-    model = Emeans(
-        CLUSTERS,
-        law_recipe(ROWS, CLUSTERS, 1, SEED),
-        Revival.MASS,
-        metric=Metric.EUCLIDEAN,
-        assignment=Assignment.FUSED,
-        probes=PROBES,
-    )
-    model.regroup(centroids, faiss.METRIC_L2)
-    offsets = np.cumsum([0, *map(len, model.blocks)])
-    groups = round(math.sqrt(CLUSTERS))
-    _, labels, _ = kernel.assign(x, model.groups, centroids, np.concatenate(model.blocks), offsets, groups)
+    groups = group_count(CLUSTERS)
+    homes = np.arange(CLUSTERS) % groups
+    offsets = np.cumsum([0, *np.bincount(homes)])
+    _, labels, _ = kernel.assign(x, centroids[:groups], centroids, np.argsort(homes, kind="stable"), offsets, groups)
     _, truth = faiss.knn(x, centroids, 1)
     assert np.array_equal(labels, truth[:, 0])
 

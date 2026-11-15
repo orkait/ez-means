@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { LANES = 16, CHUNK = 16, STREAMS = 4, MAX_PROBES = 64, ROW_CHUNK = 64, LABEL_CHUNK = 16, QUERY_BITS = 4, WORD_BITS = 64 };
+enum { LANES = 16, CHUNK = 16, STREAMS = 4, MAX_PROBES = 64, ROW_CHUNK = 64, LABEL_CHUNK = 16 };
 enum Status { DONE = 0, BAD_PROBES = 1, NO_MEMORY = 2, BAD_LABEL = 3, BAD_DIMS = 4, BAD_SIZE = 5 };
 
 static const double PI = 3.14159265358979323846;
@@ -24,8 +24,6 @@ typedef struct {
     double tau;
     double init_usage;
     double split_epsilon;
-    double ad_epsilon;
-    double screen_epsilon;
 } Settings;
 
 typedef struct {
@@ -122,8 +120,7 @@ static inline void square_into(float *acc, float value, const float *lanes)
     }
 }
 
-static inline int scan(const float *row, const float *tile, int64_t dims, float bound, const float *limits, float *total,
-                       int64_t *work)
+static inline int scan(const float *row, const float *tile, int64_t dims, float bound, float *total, int64_t *work)
 {
     float a0[LANES] = {0.0f}, a1[LANES] = {0.0f}, a2[LANES] = {0.0f}, a3[LANES] = {0.0f};
     int alive;
@@ -137,11 +134,10 @@ static inline int scan(const float *row, const float *tile, int64_t dims, float 
         }
         j += CHUNK;
         alive = 0;
-        const float threshold = bound * limits[j / CHUNK - 1];
 #pragma omp simd reduction(| : alive)
         for (int lane = 0; lane < LANES; lane++) {
             total[lane] = (a0[lane] + a1[lane]) + (a2[lane] + a3[lane]);
-            alive |= total[lane] < threshold;
+            alive |= total[lane] < bound;
         }
     } while (alive && j < dims);
     *work += j * LANES;
@@ -161,8 +157,7 @@ static void insert(float *near, int64_t *which, int64_t probes, float value, int
     which[at] = id;
 }
 
-static void probe(const float *row, const Tiles *groups, int64_t dims, const float *limits, int64_t probes, float *near, int64_t *which,
-                  int64_t *work)
+static void probe(const float *row, const Tiles *groups, int64_t dims, int64_t probes, float *near, int64_t *which, int64_t *work)
 {
     for (int64_t p = 0; p < probes; p++) {
         near[p] = INFINITY;
@@ -171,7 +166,7 @@ static void probe(const float *row, const Tiles *groups, int64_t dims, const flo
     float total[LANES];
     for (int64_t t = 0; t < groups->first[1]; t++) {
         const float bound = near[probes - 1];
-        if (!scan(row, groups->values + t * dims * LANES, dims, bound, limits, total, work))
+        if (!scan(row, groups->values + t * dims * LANES, dims, bound, total, work))
             continue;
         for (int lane = 0; lane < LANES; lane++)
             if (total[lane] < bound)
@@ -179,14 +174,14 @@ static void probe(const float *row, const Tiles *groups, int64_t dims, const flo
     }
 }
 
-static void nearest(const float *row, const Tiles *cells, int64_t dims, const float *limits, const int64_t *which, int64_t probes,
-                    float *best, int64_t *label, int64_t *work)
+static void nearest(const float *row, const Tiles *cells, int64_t dims, const int64_t *which, int64_t probes, float *best,
+                    int64_t *label, int64_t *work)
 {
     float bound = INFINITY, total[LANES];
     int64_t found = -1;
     for (int64_t p = 0; p < probes && which[p] >= 0; p++)
         for (int64_t t = cells->first[which[p]]; t < cells->first[which[p] + 1]; t++) {
-            if (!scan(row, cells->values + t * dims * LANES, dims, bound, limits, total, work))
+            if (!scan(row, cells->values + t * dims * LANES, dims, bound, total, work))
                 continue;
             for (int lane = 0; lane < LANES; lane++)
                 if (total[lane] < bound) {
@@ -199,7 +194,7 @@ static void nearest(const float *row, const Tiles *cells, int64_t dims, const fl
 }
 
 static int64_t label_rows(const float *x, const int64_t *index, int64_t count, int64_t dims, const Tiles *groups, const Tiles *cells,
-                          const float *limits, int64_t probes, float *best, int64_t *labels)
+                          int64_t probes, float *best, int64_t *labels)
 {
     int64_t total = 0;
 #pragma omp parallel for schedule(dynamic, ROW_CHUNK) reduction(+ : total)
@@ -208,8 +203,8 @@ static int64_t label_rows(const float *x, const int64_t *index, int64_t count, i
         int64_t which[MAX_PROBES];
         const float *row = x + index[r] * dims;
         int64_t scanned = 0;
-        probe(row, groups, dims, limits, probes, near, which, &scanned);
-        nearest(row, cells, dims, limits, which, probes, best + r, labels + r, &scanned);
+        probe(row, groups, dims, probes, near, which, &scanned);
+        nearest(row, cells, dims, which, probes, best + r, labels + r, &scanned);
         total += scanned;
     }
     return total;
@@ -256,18 +251,6 @@ static int sum_rows(const float *x, const int64_t *index, int64_t count, int64_t
     return DONE;
 }
 
-static float *limits_for(int64_t dims, double epsilon)
-{
-    float *limits = malloc((size_t)(dims / CHUNK) * sizeof *limits);
-    if (limits)
-        for (int64_t c = 0; c < dims / CHUNK; c++) {
-            const double seen = (double)((c + 1) * CHUNK);
-            const double slack = 1.0 + epsilon / sqrt(seen);
-            limits[c] = epsilon > 0.0 ? (float)(seen / (double)dims * slack * slack) : 1.0f;
-        }
-    return limits;
-}
-
 int assign(const float *rows, int64_t count, int64_t dims, const float *groups, int64_t group_count, const float *centroids,
            const int64_t *order, const int64_t *offsets, int64_t probes, float *best, int64_t *label, int64_t *work)
 {
@@ -276,15 +259,13 @@ int assign(const float *rows, int64_t count, int64_t dims, const float *groups, 
     if (dims < CHUNK || dims % CHUNK != 0)
         return BAD_DIMS;
     int64_t *index = identity(count);
-    float *limits = limits_for(dims, 0.0);
     Tiles group_tiles = {0}, cell_tiles = {0};
-    int status = index && limits ? tile_all(groups, group_count, dims, &group_tiles) : NO_MEMORY;
+    int status = index ? tile_all(groups, group_count, dims, &group_tiles) : NO_MEMORY;
     if (status == DONE)
         status = tile(centroids, order, offsets, group_count, dims, &cell_tiles);
     if (status == DONE)
-        *work = label_rows(rows, index, count, dims, &group_tiles, &cell_tiles, limits, probes, best, label);
+        *work = label_rows(rows, index, count, dims, &group_tiles, &cell_tiles, probes, best, label);
     free(index);
-    free(limits);
     release(&group_tiles);
     release(&cell_tiles);
     return status;
@@ -298,8 +279,8 @@ int accumulate(const float *rows, int64_t count, int64_t dims, const int64_t *la
     return status;
 }
 
-static int regroup(const float *centroids, int64_t k, int64_t dims, const Settings *settings, const float *limits, float *groups,
-                   int64_t group_count, int64_t *homes, int64_t *order, int64_t *offsets, int64_t *work)
+static int regroup(const float *centroids, int64_t k, int64_t dims, const Settings *settings, float *groups, int64_t group_count,
+                   int64_t *homes, int64_t *order, int64_t *offsets, int64_t *work)
 {
     int64_t *pool = identity(k);
     double *sums = malloc((size_t)(group_count * dims) * sizeof *sums);
@@ -322,7 +303,7 @@ static int regroup(const float *centroids, int64_t k, int64_t dims, const Settin
 #pragma omp parallel for schedule(dynamic, ROW_CHUNK) reduction(+ : total)
             for (int64_t c = 0; c < k; c++) {
                 float best;
-                nearest(centroids + c * dims, &tiles, dims, limits, only, 1, &best, homes + c, &total);
+                nearest(centroids + c * dims, &tiles, dims, only, 1, &best, homes + c, &total);
             }
             *work += total;
         }
@@ -444,295 +425,13 @@ static double scheduled(const Settings *settings, int64_t step, int64_t total)
     return settings->alpha0 * (settings->alpha_min_factor + (1.0 - settings->alpha_min_factor) * cosine);
 }
 
-static void walsh(float *row, int64_t dims)
-{
-    for (int64_t half = 1; half < dims; half *= 2)
-        for (int64_t start = 0; start < dims; start += 2 * half)
-            for (int64_t j = start; j < start + half; j++) {
-                const float a = row[j], b = row[j + half];
-                row[j] = a + b;
-                row[j + half] = a - b;
-            }
-}
-
-static void rotate(float *row, const float *signs, int64_t dims)
-{
-    const float scale = (float)(1.0 / sqrt((double)dims));
-    for (int64_t j = 0; j < dims; j++)
-        row[j] *= signs[j];
-    walsh(row, dims);
-    for (int64_t j = 0; j < dims; j++)
-        row[j] *= scale;
-}
-
-static void unrotate(float *row, const float *signs, int64_t dims)
-{
-    const float scale = (float)(1.0 / sqrt((double)dims));
-    walsh(row, dims);
-    for (int64_t j = 0; j < dims; j++)
-        row[j] *= scale * signs[j];
-}
-
-typedef struct {
-    int64_t padded;
-    int64_t words;
-    float *signs;
-    float *centers;
-    uint64_t *codes;
-    float *norms;
-    float *alignment;
-    float *slack;
-    float *ones;
-} Codes;
-
-static uint64_t ones(uint64_t v)
-{
-    v = v - ((v >> 1) & 0x5555555555555555u);
-    v = (v & 0x3333333333333333u) + ((v >> 2) & 0x3333333333333333u);
-    v = (v + (v >> 4)) & 0x0F0F0F0F0F0F0F0Fu;
-    return (v * 0x0101010101010101u) >> 56;
-}
-
-static float distance(const float *row, const float *centroid, int64_t dims)
-{
-    float lanes[LANES] = {0.0f};
-    for (int64_t j = 0; j < dims; j += LANES) {
-#pragma omp simd
-        for (int lane = 0; lane < LANES; lane++) {
-            const float gap = row[j + lane] - centroid[j + lane];
-            lanes[lane] += gap * gap;
-        }
-    }
-    float sum = 0.0f;
-    for (int lane = 0; lane < LANES; lane++)
-        sum += lanes[lane];
-    return sum;
-}
-
-static int64_t power_of_two(int64_t dims)
-{
-    int64_t padded = 1;
-    while (padded < dims)
-        padded *= 2;
-    return padded;
-}
-
-static void lift(float *into, const float *row, int64_t width, int64_t padded, const float *signs)
-{
-    memcpy(into, row, (size_t)width * sizeof *into);
-    memset(into + width, 0, (size_t)(padded - width) * sizeof *into);
-    rotate(into, signs, padded);
-}
-
-static void release_codes(Codes *codes)
-{
-    free(codes->signs);
-    free(codes->centers);
-    free(codes->codes);
-    free(codes->norms);
-    free(codes->alignment);
-    free(codes->slack);
-    free(codes->ones);
-    *codes = (Codes){0};
-}
-
-static int prepare_codes(Codes *codes, int64_t k, int64_t group_count, int64_t width, uint64_t seed)
-{
-    codes->padded = power_of_two(width);
-    codes->words = (codes->padded + WORD_BITS - 1) / WORD_BITS;
-    codes->signs = malloc((size_t)codes->padded * sizeof *codes->signs);
-    codes->centers = malloc((size_t)(group_count * codes->padded) * sizeof *codes->centers);
-    codes->codes = malloc((size_t)(k * codes->words) * sizeof *codes->codes);
-    codes->norms = malloc((size_t)k * sizeof *codes->norms);
-    codes->alignment = malloc((size_t)k * sizeof *codes->alignment);
-    codes->slack = malloc((size_t)k * sizeof *codes->slack);
-    codes->ones = malloc((size_t)k * sizeof *codes->ones);
-    if (!codes->signs || !codes->centers || !codes->codes || !codes->norms || !codes->alignment || !codes->slack || !codes->ones)
-        return NO_MEMORY;
-    uint64_t state = seed;
-    for (int64_t j = 0; j < codes->padded; j++)
-        codes->signs[j] = next(&state) >> 63 ? -1.0f : 1.0f;
-    return DONE;
-}
-
-static void encode_centers(Codes *codes, const float *groups, int64_t group_count, int64_t width)
-{
-    for (int64_t g = 0; g < group_count; g++)
-        lift(codes->centers + g * codes->padded, groups + g * width, width, codes->padded, codes->signs);
-}
-
-static int encode(Codes *codes, const float *centroids, const int64_t *homes, int64_t k, int64_t width, double epsilon)
-{
-    const int64_t padded = codes->padded;
-    const double root = sqrt((double)padded);
-    int status = DONE;
-#pragma omp parallel
-    {
-        float *turned = malloc((size_t)padded * sizeof *turned);
-        if (!turned) {
-#pragma omp atomic write
-            status = NO_MEMORY;
-        }
-#pragma omp for schedule(static)
-        for (int64_t c = 0; c < k; c++) {
-            if (!turned)
-                continue;
-            lift(turned, centroids + c * width, width, padded, codes->signs);
-            const float *center = codes->centers + homes[c] * padded;
-            float norm = 0.0f, absolute = 0.0f;
-            uint64_t *bits = codes->codes + c * codes->words;
-            memset(bits, 0, (size_t)codes->words * sizeof *bits);
-            for (int64_t j = 0; j < padded; j++) {
-                const float value = turned[j] - center[j];
-                norm += value * value;
-                absolute += fabsf(value);
-                if (value > 0.0f)
-                    bits[j / WORD_BITS] |= (uint64_t)1 << (j % WORD_BITS);
-            }
-            norm = sqrtf(norm);
-            uint64_t positive = 0;
-            for (int64_t w = 0; w < codes->words; w++)
-                positive += ones(bits[w]);
-            const double align = norm > 0.0f ? (double)absolute / (root * (double)norm) : 1.0;
-            codes->norms[c] = norm;
-            codes->alignment[c] = (float)align;
-            codes->slack[c] = (float)(epsilon * sqrt(fmax(1.0 - align * align, 0.0) / (align * align)) / sqrt((double)(padded - 1)));
-            codes->ones[c] = (float)positive;
-        }
-        free(turned);
-    }
-    return status;
-}
-
-static int64_t screen_rows(const float *x, const int64_t *index, int64_t count, int64_t width, const Tiles *groups,
-                           const float *limits, int64_t probes, const float *centroids, const int64_t *order,
-                           const int64_t *offsets, int64_t group_count, const Codes *codes, float *best, int64_t *labels,
-                           int *status)
-{
-    const int64_t padded = codes->padded, words = codes->words;
-    const float levels = (float)((1 << QUERY_BITS) - 1);
-    const float root = sqrtf((float)padded);
-    int64_t widest = 0;
-    for (int64_t g = 0; g < group_count; g++)
-        widest = offsets[g + 1] - offsets[g] > widest ? offsets[g + 1] - offsets[g] : widest;
-    int64_t total = 0;
-#pragma omp parallel reduction(+ : total)
-    {
-        float *turned = malloc((size_t)padded * sizeof *turned);
-        float *query = malloc((size_t)padded * sizeof *query);
-        uint64_t *planes = malloc((size_t)(QUERY_BITS * words) * sizeof *planes);
-        float *bounds = malloc((size_t)(widest > 0 ? widest : 1) * sizeof *bounds);
-        if (!turned || !query || !planes || !bounds) {
-#pragma omp atomic write
-            *status = NO_MEMORY;
-        }
-#pragma omp for schedule(dynamic, ROW_CHUNK)
-        for (int64_t r = 0; r < count; r++) {
-            if (!turned || !query || !planes || !bounds)
-                continue;
-            float near[MAX_PROBES];
-            int64_t which[MAX_PROBES];
-            const float *row = x + index[r] * width;
-            int64_t scanned = 0;
-            probe(row, groups, width, limits, probes, near, which, &scanned);
-            lift(turned, row, width, padded, codes->signs);
-            float bound = INFINITY;
-            int64_t found = -1;
-            for (int64_t p = 0; p < probes && which[p] >= 0; p++) {
-                const float *center = codes->centers + which[p] * padded;
-                float low = INFINITY, high = -INFINITY, energy = 0.0f;
-                for (int64_t j = 0; j < padded; j++) {
-                    query[j] = turned[j] - center[j];
-                    low = query[j] < low ? query[j] : low;
-                    high = query[j] > high ? query[j] : high;
-                    energy += query[j] * query[j];
-                }
-                const float length = sqrtf(energy);
-                const float step = high > low ? (high - low) / levels : 0.0f;
-                const float inverse = step > 0.0f ? 1.0f / step : 0.0f;
-                float summed = 0.0f;
-                for (int64_t w = 0; w < words; w++) {
-                    uint64_t plane[QUERY_BITS] = {0};
-                    const int64_t end = (w + 1) * WORD_BITS < padded ? (w + 1) * WORD_BITS : padded;
-                    for (int64_t j = w * WORD_BITS; j < end; j++) {
-                        const uint64_t level = (uint64_t)((query[j] - low) * inverse + 0.5f);
-                        const int64_t bit = j - w * WORD_BITS;
-                        summed += (float)level;
-                        for (int t = 0; t < QUERY_BITS; t++)
-                            plane[t] |= ((level >> t) & 1u) << bit;
-                    }
-                    for (int t = 0; t < QUERY_BITS; t++)
-                        planes[t * words + w] = plane[t];
-                }
-                const float offset = (float)padded * low + step * summed;
-                const int64_t first = offsets[which[p]], members = offsets[which[p] + 1] - first;
-                int64_t lowest = -1;
-                for (int64_t i = 0; i < members; i++) {
-                    const int64_t c = order[first + i];
-                    const uint64_t *bits = codes->codes + c * words;
-                    uint64_t weighted = 0;
-                    for (int t = 0; t < QUERY_BITS; t++) {
-                        uint64_t part = 0;
-                        for (int64_t w = 0; w < words; w++)
-                            part += ones(bits[w] & planes[t * words + w]);
-                        weighted += part << t;
-                    }
-                    const float dot = 2.0f * (low * codes->ones[c] + step * (float)weighted) - offset;
-                    const float norm = codes->norms[c];
-                    float lower = energy + norm * norm;
-                    if (length > 0.0f && norm > 0.0f) {
-                        const float estimate = dot / (root * length * codes->alignment[c]);
-                        const float inner = estimate + codes->slack[c] < 1.0f ? estimate + codes->slack[c] : 1.0f;
-                        lower -= 2.0f * length * norm * inner;
-                    }
-                    bounds[i] = lower;
-                    if (lowest < 0 || lower < bounds[lowest])
-                        lowest = i;
-                }
-                for (int64_t visit = -1; visit < members; visit++) {
-                    const int64_t i = visit < 0 ? lowest : visit;
-                    if (i < 0 || (visit >= 0 && i == lowest) || !(bounds[i] <= bound))
-                        continue;
-                    const int64_t c = order[first + i];
-                    const float exact = distance(row, centroids + c * width, width);
-                    scanned += width;
-                    if (exact < bound) {
-                        bound = exact;
-                        found = c;
-                    }
-                }
-            }
-            best[r] = bound;
-            labels[r] = found;
-            total += scanned;
-        }
-        free(turned);
-        free(query);
-        free(planes);
-        free(bounds);
-    }
-    return total;
-}
-
-static int64_t padded_width(int64_t dims, int sampling)
-{
-    int64_t width = CHUNK;
-    if (sampling) {
-        while (width < dims)
-            width *= 2;
-        return width;
-    }
-    return (dims + CHUNK - 1) / CHUNK * CHUNK;
-}
-
 int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *plan, int64_t epochs, const Settings *settings,
           const float *init, int64_t init_count, float *out, int64_t *work)
 {
     const int64_t rounded = llround(sqrt((double)k));
     const int64_t group_count = rounded > 1 ? rounded : 1;
-    const int sampling = settings->ad_epsilon > 0.0;
-    const int64_t width = padded_width(dims, sampling);
-    const int copying = sampling || width != dims;
+    const int64_t width = (dims + CHUNK - 1) / CHUNK * CHUNK;
+    const int copying = width != dims;
     if (dims < 1)
         return BAD_DIMS;
     if (settings->probes < 1 || settings->probes > MAX_PROBES || settings->probes > group_count)
@@ -754,31 +453,18 @@ int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *pla
     int64_t *homes = malloc((size_t)k * sizeof *homes);
     int64_t *cell_order = malloc((size_t)k * sizeof *cell_order);
     int64_t *offsets = malloc((size_t)(group_count + 1) * sizeof *offsets);
-    float *limits = limits_for(width, settings->ad_epsilon);
-    float *signs = sampling ? malloc((size_t)width * sizeof *signs) : NULL;
     float *working = copying ? malloc((size_t)n * (size_t)width * sizeof *working) : NULL;
-    const int screening = settings->screen_epsilon > 0.0;
     Tiles group_tiles = {0}, cell_tiles = {0};
-    Codes codes = {0};
     int status = order && centroids && usage && sums && counts && pass_sums && pass_counts && best && labels && groups && homes &&
-                         cell_order && offsets && limits && (!sampling || signs) && (!copying || working)
+                         cell_order && offsets && (!copying || working)
                      ? DONE
                      : NO_MEMORY;
-    if (status == DONE && screening)
-        status = prepare_codes(&codes, k, group_count, width, settings->seed ^ GOLDEN);
-    if (status == DONE && sampling) {
-        uint64_t turn = ~settings->seed;
-        for (int64_t j = 0; j < width; j++)
-            signs[j] = next(&turn) >> 63 ? -1.0f : 1.0f;
-    }
     if (status == DONE && copying) {
 #pragma omp parallel for schedule(static)
         for (int64_t r = 0; r < n; r++) {
             float *row = working + r * width;
             memcpy(row, x + r * dims, (size_t)dims * sizeof *row);
             memset(row + dims, 0, (size_t)(width - dims) * sizeof *row);
-            if (sampling)
-                rotate(row, signs, width);
         }
     }
     const float *data = copying ? working : x;
@@ -793,8 +479,6 @@ int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *pla
             if (init_count) {
                 memcpy(centroid, init + c * dims, (size_t)dims * sizeof *centroid);
                 memset(centroid + dims, 0, (size_t)(width - dims) * sizeof *centroid);
-                if (sampling)
-                    rotate(centroid, signs, width);
             } else {
                 memcpy(centroid, data + order[c] * width, (size_t)width * sizeof *centroid);
             }
@@ -811,23 +495,15 @@ int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *pla
             const int64_t *index = order + begin;
             if (searches % settings->check_every == 0) {
                 release(&group_tiles);
-                status = regroup(centroids, k, width, settings, limits, groups, group_count, homes, cell_order, offsets, work);
+                status = regroup(centroids, k, width, settings, groups, group_count, homes, cell_order, offsets, work);
                 if (status == DONE)
                     status = tile_all(groups, group_count, width, &group_tiles);
-                if (status == DONE && screening)
-                    encode_centers(&codes, groups, group_count, width);
             }
             searches++;
-            if (status == DONE && screening) {
-                status = encode(&codes, centroids, homes, k, width, settings->screen_epsilon);
-                if (status == DONE)
-                    *work += screen_rows(data, index, count, width, &group_tiles, limits, settings->probes, centroids, cell_order,
-                                         offsets, group_count, &codes, best, labels, &status);
-            } else if (status == DONE) {
+            if (status == DONE)
                 status = tile(centroids, cell_order, offsets, group_count, width, &cell_tiles);
-                if (status == DONE)
-                    *work += label_rows(data, index, count, width, &group_tiles, &cell_tiles, limits, settings->probes, best, labels);
-            }
+            if (status == DONE)
+                *work += label_rows(data, index, count, width, &group_tiles, &cell_tiles, settings->probes, best, labels);
             if (status == DONE)
                 status = sum_rows(data, index, count, width, labels, k, sums, counts);
             release(&cell_tiles);
@@ -850,16 +526,11 @@ int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *pla
             float *mean = sums + c * width;
             for (int64_t j = 0; j < width; j++)
                 mean[j] = pass_counts[c] > 0.0 ? pass_sums[c * width + j] / (float)pass_counts[c] : centroids[c * width + j];
-            if (sampling)
-                unrotate(mean, signs, width);
             memcpy(out + c * dims, mean, (size_t)dims * sizeof *out);
         }
     }
     release(&group_tiles);
-    free(limits);
-    free(signs);
     free(working);
-    release_codes(&codes);
     free(order);
     free(centroids);
     free(usage);

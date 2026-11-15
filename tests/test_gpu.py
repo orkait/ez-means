@@ -2,7 +2,7 @@ import pytest
 import torch
 
 from ezmeans.gpu.index import GroupIndex
-from ezmeans.reference import group_count
+from ezmeans.recipe import group_count
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
 

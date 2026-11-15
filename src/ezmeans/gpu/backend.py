@@ -3,7 +3,7 @@ from faiss.contrib.e_means.e_means_torch import Emeans as TorchEmeans
 from faiss.contrib.e_means.torch_backend import TritonBackend
 
 from ezmeans.gpu.index import Fault, GpuInputError, GroupIndex
-from ezmeans.reference import CHECK_EVERY, Recipe
+from ezmeans.recipe import CHECK_EVERY, Recipe
 
 
 class GroupedBackend(TritonBackend):

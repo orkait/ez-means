@@ -4,7 +4,7 @@ import torch
 
 from ezmeans.gpu import kernels
 from ezmeans.gpu.constants import CUDA, MATRIX_RANK, MAX_GROUP_SPAN, MEMBER_TILE, PAIR_ROWS
-from ezmeans.reference import GROUP_ITERATIONS, group_count
+from ezmeans.recipe import GROUP_ITERATIONS, group_count
 
 
 class Fault(Enum):
