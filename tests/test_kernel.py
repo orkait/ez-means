@@ -15,6 +15,7 @@ from ezmeans.trainer import ez_means
 ROWS = 4096
 CLUSTERS = 256
 DIMS = 32
+KERNEL_CHUNK = 16
 EPOCHS = 2
 PROBES = 4
 SEED = 0
@@ -53,7 +54,7 @@ def fit(x: Matrix, init: Matrix | None = None, epochs: float = EPOCHS) -> Matrix
     return ez_means(x, CLUSTERS, law_recipe(ROWS, CLUSTERS, epochs, SEED), PROBES, init=init)
 
 
-def search(x: Matrix, homes: Labels, probes: int = GROUPS) -> tuple[Matrix, Labels]:
+def search(x: Matrix, homes: Labels, probes: int = GROUPS) -> Labels:
     centroids = np.ascontiguousarray(x[:CLUSTERS])
     return kernel.assign(x, centroids[:GROUPS], centroids, homes, probes)
 
@@ -62,7 +63,7 @@ def search(x: Matrix, homes: Labels, probes: int = GROUPS) -> tuple[Matrix, Labe
 @pytest.mark.parametrize("dims", [16, 64, 128])
 def test_probing_every_occupied_group_is_brute_force(dims: int, occupied: int) -> None:
     x = points(dims)
-    _, labels = search(x, round_robin() % occupied, occupied)
+    labels = search(x, round_robin() % occupied, occupied)
     wide, centers = x.astype(np.float64), x[:CLUSTERS].astype(np.float64)
     squared = (wide**2).sum(axis=1)[:, None] - 2.0 * wide @ centers.T + (centers**2).sum(axis=1)[None, :]
     assert np.array_equal(labels, squared.argmin(axis=1))
@@ -106,7 +107,7 @@ def test_bad_input_raises_kernel_error(call: Callable[[], object], status: Kerne
 @pytest.mark.parametrize("dims", [20, 100])
 def test_zero_padding_does_not_change_centroids(dims: int) -> None:
     x = points(dims)
-    width = -(-dims // 16) * 16
+    width = -(-dims // KERNEL_CHUNK) * KERNEL_CHUNK
     padded = np.zeros((ROWS, width), dtype=np.float32)
     padded[:, :dims] = x
     recipe = law_recipe(ROWS, CLUSTERS, EPOCHS, SEED)
@@ -116,10 +117,10 @@ def test_zero_padding_does_not_change_centroids(dims: int) -> None:
 
 
 def test_accumulate_matches_numpy_add_at() -> None:
-    x = points(64)
+    x = points(DIMS)
     labels = np.random.default_rng(SEED).integers(0, CLUSTERS, ROWS)
     sums, counts = kernel.accumulate(x, labels, CLUSTERS)
-    expected = np.zeros((CLUSTERS, 64), dtype=np.float32)
+    expected = np.zeros((CLUSTERS, DIMS), dtype=np.float32)
     np.add.at(expected, labels, x)
     assert np.array_equal(sums, expected)
     assert np.array_equal(counts, np.bincount(labels, minlength=CLUSTERS).astype(np.float32))

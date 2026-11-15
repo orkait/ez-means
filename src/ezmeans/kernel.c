@@ -175,8 +175,7 @@ static void probe(const float *row, const Tiles *groups, const Tiles *cells, int
     }
 }
 
-static void nearest(const float *row, const Tiles *cells, int64_t dims, const int64_t *which, int64_t probes, float *best,
-                    int64_t *label)
+static void nearest(const float *row, const Tiles *cells, int64_t dims, const int64_t *which, int64_t probes, int64_t *label)
 {
     float bound = INFINITY, total[LANES];
     int64_t found = -1;
@@ -190,12 +189,11 @@ static void nearest(const float *row, const Tiles *cells, int64_t dims, const in
                     found = cells->ids[t * LANES + lane];
                 }
         }
-    *best = bound;
     *label = found;
 }
 
 static void label_rows(const float *x, const int64_t *index, int64_t count, int64_t dims, const Tiles *groups, const Tiles *cells,
-                       int64_t probes, float *best, int64_t *labels)
+                       int64_t probes, int64_t *labels)
 {
 #pragma omp parallel for schedule(dynamic, ROW_CHUNK)
     for (int64_t r = 0; r < count; r++) {
@@ -203,7 +201,7 @@ static void label_rows(const float *x, const int64_t *index, int64_t count, int6
         int64_t which[MAX_PROBES];
         const float *row = x + index[r] * dims;
         probe(row, groups, cells, dims, probes, near, which);
-        nearest(row, cells, dims, which, probes, best + r, labels + r);
+        nearest(row, cells, dims, which, probes, labels + r);
     }
 }
 
@@ -257,7 +255,7 @@ static int sum_rows(const float *x, const int64_t *index, int64_t count, int64_t
 }
 
 int assign(const float *rows, int64_t count, int64_t dims, const float *groups, int64_t group_count, const float *centroids,
-           const int64_t *order, const int64_t *offsets, int64_t probes, float *best, int64_t *label)
+           const int64_t *order, const int64_t *offsets, int64_t probes, int64_t *label)
 {
     if (probes < 1 || probes > MAX_PROBES || probes > group_count)
         return BAD_PROBES;
@@ -271,7 +269,7 @@ int assign(const float *rows, int64_t count, int64_t dims, const float *groups, 
     if (status == DONE)
         status = tile(centroids, order, offsets, group_count, dims, &cell_tiles);
     if (status == DONE) {
-        label_rows(rows, index, count, dims, &group_tiles, &cell_tiles, probes, best, label);
+        label_rows(rows, index, count, dims, &group_tiles, &cell_tiles, probes, label);
         status = all_found(label, count);
     }
     free(index);
@@ -309,10 +307,8 @@ static int regroup(const float *centroids, int64_t k, int64_t dims, const Settin
         if (status == DONE) {
             const int64_t only[1] = {0};
 #pragma omp parallel for schedule(dynamic, ROW_CHUNK)
-            for (int64_t c = 0; c < k; c++) {
-                float best;
-                nearest(centroids + c * dims, &tiles, dims, only, 1, &best, homes + c);
-            }
+            for (int64_t c = 0; c < k; c++)
+                nearest(centroids + c * dims, &tiles, dims, only, 1, homes + c);
             status = all_found(homes, k);
         }
         release(&tiles);
@@ -458,7 +454,6 @@ int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *pla
     float *counts = malloc((size_t)k * sizeof *counts);
     float *pass_sums = calloc(table, sizeof *pass_sums);
     double *pass_counts = calloc((size_t)k, sizeof *pass_counts);
-    float *best = malloc((size_t)batch * sizeof *best);
     int64_t *labels = malloc((size_t)batch * sizeof *labels);
     float *groups = malloc((size_t)(group_count * width) * sizeof *groups);
     int64_t *homes = malloc((size_t)k * sizeof *homes);
@@ -467,7 +462,7 @@ int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *pla
     float *padded = copying ? calloc((size_t)batch * (size_t)width, sizeof *padded) : NULL;
     int64_t *local = copying ? identity(batch) : NULL;
     Tiles group_tiles = {0}, cell_tiles = {0};
-    int status = order && centroids && usage && sums && counts && pass_sums && pass_counts && best && labels && groups && homes &&
+    int status = order && centroids && usage && sums && counts && pass_sums && pass_counts && labels && groups && homes &&
                          cell_order && offsets && (!copying || (padded && local))
                      ? DONE
                      : NO_MEMORY;
@@ -510,7 +505,7 @@ int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *pla
             if (status == DONE)
                 status = tile(centroids, cell_order, offsets, group_count, width, &cell_tiles);
             if (status == DONE) {
-                label_rows(rows, index, count, width, &group_tiles, &cell_tiles, settings->probes, best, labels);
+                label_rows(rows, index, count, width, &group_tiles, &cell_tiles, settings->probes, labels);
                 status = all_found(labels, count);
             }
             if (status == DONE)
@@ -548,7 +543,6 @@ int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *pla
     free(counts);
     free(pass_sums);
     free(pass_counts);
-    free(best);
     free(labels);
     free(groups);
     free(homes);

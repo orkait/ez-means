@@ -3,7 +3,7 @@ from enum import Enum
 import torch
 
 from ezmeans.gpu import kernels
-from ezmeans.gpu.constants import CUDA, MATRIX_RANK, MAX_GROUP_SPAN, MEMBER_TILE, PAIR_ROWS
+from ezmeans.gpu.constants import CUDA, MATRIX_RANK, MAX_GROUP_SPAN, PAIR_ROWS
 from ezmeans.recipe import GROUP_ITERATIONS, group_count
 
 
@@ -61,7 +61,6 @@ class GroupIndex:
         self.rounded = torch.zeros((span, padded), dtype=torch.bfloat16, device=self.device)
         self.rounded_norms = torch.full((span,), float("inf"), dtype=torch.float32, device=self.device)
         self.group_ends = torch.zeros(span, dtype=torch.int32, device=self.device)
-        self.group_blocks = torch.zeros(span, dtype=torch.int32, device=self.device)
         self.fill = torch.zeros(span, dtype=torch.int32, device=self.device)
         self.order = torch.zeros(k, dtype=torch.int32, device=self.device)
         self.members = torch.zeros((k, padded), dtype=torch.bfloat16, device=self.device)
@@ -80,7 +79,7 @@ class GroupIndex:
                 )
                 if iteration < GROUP_ITERATIONS:
                     kernels.update(self.centers, self.center_norms, self.sums, self.sizes, self.groups)
-            kernels.plan(self.sizes, self.group_ends, self.group_blocks, self.groups, MEMBER_TILE)
+            torch.cumsum(self.sizes, 0, dtype=torch.int32, out=self.group_ends)
             self.fill.zero_()
             kernels.bucket(self.owner, self.group_ends, self.sizes, self.fill, self.order)
             kernels.publish(self.centers, self.sizes, self.rounded, self.rounded_norms, self.groups)

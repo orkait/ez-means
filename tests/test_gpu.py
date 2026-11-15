@@ -13,6 +13,7 @@ PROBES = 4
 SEED = 0
 EPOCHS = 1
 QUALITY_LAW_DIMS = 8
+SYNC_DIMS = 128
 POISONED_ROW = 7
 OVERFLOW_SCALE = 1e20
 FOREIGN_BACKEND = "foreign"
@@ -45,8 +46,8 @@ def test_probing_every_group_is_brute_force(dims: int) -> None:
 
 
 def test_index_never_synchronizes_the_host() -> None:
-    rows, centroids = sample(128)
-    index = GroupIndex(CLUSTERS, 128, PROBES, SEED)
+    rows, centroids = sample(SYNC_DIMS)
+    index = GroupIndex(CLUSTERS, SYNC_DIMS, PROBES, SEED)
     torch.cuda.synchronize()
     torch.cuda.set_sync_debug_mode(SYNC_ERROR)
     try:

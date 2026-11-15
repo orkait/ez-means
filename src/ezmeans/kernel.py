@@ -75,7 +75,6 @@ def library() -> ctypes.CDLL:
         INDICES,
         INDICES,
         SIZE,
-        FLOATS,
         INDICES,
     ]
     loaded.accumulate.argtypes = [FLOATS, SIZE, SIZE, INDICES, SIZE, FLOATS, FLOATS]
@@ -117,14 +116,13 @@ def check(status: int) -> None:
         raise KernelError(code)
 
 
-def assign(rows: Matrix, groups: Matrix, centroids: Matrix, homes: Labels, probes: int) -> tuple[Matrix, Labels]:
+def assign(rows: Matrix, groups: Matrix, centroids: Matrix, homes: Labels, probes: int) -> Labels:
     count, dims = rows.shape
     if groups.shape[1:] != (dims,) or centroids.shape[1:] != (dims,) or homes.shape != (len(centroids),):
         raise KernelError(KernelStatus.BAD_SIZE)
     if np.any((homes < 0) | (homes >= len(groups))):
         raise KernelError(KernelStatus.BAD_LABEL)
     offsets = np.concatenate(([0], np.cumsum(np.bincount(homes, minlength=len(groups)))))
-    best = np.empty(count, dtype=np.float32)
     labels = np.empty(count, dtype=np.int64)
     check(
         library().assign(
@@ -137,11 +135,10 @@ def assign(rows: Matrix, groups: Matrix, centroids: Matrix, homes: Labels, probe
             np.ascontiguousarray(np.argsort(homes, kind="stable"), dtype=np.int64),
             np.ascontiguousarray(offsets, dtype=np.int64),
             probes,
-            best,
             labels,
         )
     )
-    return best, labels
+    return labels
 
 
 def accumulate(rows: Matrix, labels: Labels, k: int) -> tuple[Matrix, Matrix]:
@@ -163,7 +160,7 @@ def train(x: Matrix, k: int, plan: list[int], settings: Settings, init: Matrix |
     if init is not None and init.shape != (k, dims):
         raise KernelError(KernelStatus.BAD_SIZE)
     centroids = np.empty((k, dims), dtype=np.float32)
-    rows = np.asarray(plan, dtype=np.int64)
+    plan_rows = np.asarray(plan, dtype=np.int64)
     start = np.empty(0, dtype=np.float32) if init is None else np.ascontiguousarray(init, dtype=np.float32)
     check(
         library().train(
@@ -171,8 +168,8 @@ def train(x: Matrix, k: int, plan: list[int], settings: Settings, init: Matrix |
             n,
             dims,
             k,
-            rows,
-            len(rows),
+            plan_rows,
+            len(plan_rows),
             ctypes.byref(settings),
             start,
             0 if init is None else len(start),
