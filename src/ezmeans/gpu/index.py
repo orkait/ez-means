@@ -18,7 +18,7 @@ class Fault(Enum):
     TOO_MANY_GROUPS = "k needs more groups than the kernels support"
     NOT_GROUPED = "regroup must run before refresh or assign"
     SPHERICAL = "only Euclidean assignment is supported"
-    NOT_FINITE = "the rows must be finite"
+    NOT_FINITE = "every row must be finite, with a norm small enough for float32 squared distances"
     UNSUPPORTED_FAISS = "this faiss version bypassed the grouped assignment backend"
 
 

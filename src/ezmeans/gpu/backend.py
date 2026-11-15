@@ -2,6 +2,7 @@ import torch
 from faiss.contrib.e_means.e_means_torch import Emeans as TorchEmeans
 from faiss.contrib.e_means.torch_backend import TritonBackend
 
+from ezmeans.gpu.constants import MAX_ROW_NORM
 from ezmeans.gpu.index import Fault, GpuInputError, GroupIndex
 from ezmeans.recipe import CHECK_EVERY, Recipe
 
@@ -60,7 +61,7 @@ def emeans(dims: int, k: int, recipe: Recipe, probes: int, device: torch.device)
 
 
 def train(x: torch.Tensor, k: int, recipe: Recipe, probes: int) -> torch.Tensor:
-    if not bool(torch.isfinite(x).all()):
+    if not bool(torch.linalg.vector_norm(x, dim=1, dtype=torch.float32).max() < MAX_ROW_NORM):
         raise GpuInputError(Fault.NOT_FINITE)
     model, backend = emeans(x.shape[1], k, recipe, probes, x.device)
     centroids, _ = model.train(x)

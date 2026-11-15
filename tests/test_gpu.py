@@ -14,6 +14,7 @@ SEED = 0
 EPOCHS = 1
 QUALITY_LAW_DIMS = 8
 POISONED_ROW = 7
+OVERFLOW_SCALE = 1e20
 FOREIGN_BACKEND = "foreign"
 SYNC_ERROR = "error"
 SYNC_DEFAULT = "default"
@@ -64,9 +65,10 @@ def test_training_follows_the_recipe() -> None:
     assert (model.recipe["batch_size"], model.recipe["alpha0"]) == (recipe.batch, recipe.alpha0)
 
 
-def test_training_rejects_non_finite_rows() -> None:
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), OVERFLOW_SCALE], ids=["nan", "inf", "overflow"])
+def test_training_rejects_rows_without_finite_distances(value: float) -> None:
     rows, _ = sample(QUALITY_LAW_DIMS)
-    rows[POISONED_ROW] = float("nan")
+    rows[POISONED_ROW] = value
     with pytest.raises(GpuInputError) as raised:
         train(rows, CLUSTERS, law_recipe(ROWS, CLUSTERS, EPOCHS, SEED), PROBES)
     assert raised.value.fault is Fault.NOT_FINITE

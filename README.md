@@ -66,7 +66,7 @@ x = torch.randn(1_000_000, 96, device="cuda").to(torch.bfloat16)
 centroids = train(x, 16384, law_recipe(len(x), 16384, 2, 0), 4)
 ```
 
-`ezmeans.gpu` runs faiss' GPU e-means (`TorchEmeans`) with its assignment swapped for a grouped search in Triton kernels that never synchronize the host. `x` is a CUDA `bfloat16` tensor; distances accumulate in `float32`. It trains with the recipe's batch, step and revival threshold, the same as the CPU path, and rows that are not finite raise `GpuInputError(NOT_FINITE)`.
+`ezmeans.gpu` runs faiss' GPU e-means (`TorchEmeans`) with its assignment swapped for a grouped search in Triton kernels that never synchronize the host. `x` is a CUDA `bfloat16` tensor; distances accumulate in `float32`. It trains with the recipe's batch, step and revival threshold, the same as the CPU path, and rows that are not finite, or whose norm passes about 9.2e18 (half the square root of the `float32` maximum, where squared distances could overflow), raise `GpuInputError(NOT_FINITE)`.
 
 ## 📦 Installation
 

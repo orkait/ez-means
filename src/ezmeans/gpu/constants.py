@@ -1,6 +1,11 @@
+import math
+
+import torch
 import triton.language as tl
 
 CUDA = "cuda"
+# Every score and squared distance is at most (2 * norm) ** 2, which this bound keeps inside float32.
+MAX_ROW_NORM = math.sqrt(torch.finfo(torch.float32).max / 4)
 MATRIX_RANK = 2
 SELECT_ROWS = 32
 PAIR_ROWS = 64
