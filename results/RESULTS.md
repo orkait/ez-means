@@ -319,17 +319,34 @@ ez-means alone on SIFT1M, k=4096, best of 3 seconds, on both machines, with FMA 
 
 The paper's e-means runs in a BLAS GEMM, which slows only 1.4x on Zen 3. So the lead over paper e-means depends on the hardware: about 10x at equal epochs on Zen 5, and 5.5-6.9x on Zen 3. The lead over classical k-means, 26-57x, holds on both.
 
+## 13. Next algorithmic levers (`warm_start.py`, `routing.py`, perf)
+
+ez-means on SIFT1M at T=2, 4 cores. `perf` samples per phase, as a share of the whole run, including Python and data loading:
+
+| k | Total | Assignment | Regroup | Accumulate |
+|---|---|---|---|---|
+| 4096 | 1.04 s | 81% | 2.4% | 4.2% |
+| 16384 | 2.26 s | 71% | 11% | 2.5% |
+| 65536 | 7.33 s | 72% | 16% | 1.0% |
+
+Each lever was then tested on its own:
+
+| Lever | Result | Verdict |
+|---|---|---|
+| Start each point's search from its previous-epoch centroid | 0.7-1.5% less distance work at k 4096 and 16384. The scan already visits the nearest group first, so its bound is tight early | dead, code removed |
+| 3-level routing with beams, against 2-level, on fixed trained centroids (2000 points) | at equal true-nearest rate it needs about 1.5-1.7x fewer distance evaluations, not the 3.5x the candidate count suggests. Example at k=16384: 2-level p4 uses 691 evaluations, finds the true nearest 93.9% of the time, and costs 0.95% extra. 3-level with beams (4, 8) uses 370, 92.6% and 1.17% | modest; only for k ≥ 65536 |
+| Fixed p4 as k grows | excess cost on fixed centroids is 0.37% at k=1024, 0.95% at 16384 and 1.74% at 65536 | probes should grow with k |
+| Initialize from ez-means on a 10% or 25% subsample, then train for fewer epochs, with default or trusted initial usage | every arm lies on the plain time-quality curve. The best, 10% subsample then T=2, reaches 1.0003 against plain T=3 in 1.16 s, while plain reaches about 1.0008 at the same time | dead: e-means already uses its first pass well |
+
+The race budgets T=1, 2, 3, 4 also overstate ez-means' time to target: plain T=2 lands at 1.0011, so a fractional T of about 2.2 (about 1.15 s) would cross. The paper protocol, with 0.2-epoch steps, does not have this problem.
+
 ## Next
 
 | # | Step | Why |
 |---|---|---|
-| 1 | Phase breakdown of the C loop (assign, regroup, accumulate, update), then the previous-label bound, a 3-level hierarchy, and coarse-to-fine init | the next algorithmic levers, ranked in the session notes |
-| 1a | Probes as a function of k and data, not a fixed 4 | SPACEV at k=16384 needs p8 |
-| 1b | Paper's 1M protocol at k=16384 on DEEP, SPACEV and SSNPP, e-means against ez-means (`paper_cpu.py --arms e-means ez-means`) | the race covers one dataset at one k |
-| 1c | Why approximate grouped assignment costs almost nothing after training | on fixed centroids grouped p4 misses the true nearest for 3.4% of points (0.4% excess cost), but the trained centroids lose only 0.00-0.04% |
-| 2 | Run k=16k on SIFT1M and DEEP / SPACEV | confirm that the speedup keeps growing with k and holds beyond SIFT |
-| 3 | Combine coarse-to-fine init, grouped refine and the verified swap | one algorithm that is both fast and reliable |
-| 4 | Test the swap's acceptance for significance | stop the small loss on continuous data |
+| 1 | Probes as a function of k (and adaptive per point) | the fixed-p4 excess grows with k; SPACEV at k=16384 needs p8 |
+| 2 | 10 seeds and error bars on the paper protocol | the paper uses seeds 10-19 |
+| 3 | The 10M / k=65536 protocol, and a third CPU (Intel AVX-512 on Modal) | scale and hardware coverage |
 
 ## Verification
 

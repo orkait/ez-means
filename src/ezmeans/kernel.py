@@ -34,7 +34,19 @@ def library() -> ctypes.CDLL:
         INDICES,
     ]
     loaded.accumulate.argtypes = [FLOATS, SIZE, SIZE, INDICES, SIZE, FLOATS, FLOATS]
-    loaded.train.argtypes = [FLOATS, SIZE, SIZE, SIZE, INDICES, SIZE, ctypes.POINTER(Settings), FLOATS, INDICES]
+    loaded.train.argtypes = [
+        FLOATS,
+        SIZE,
+        SIZE,
+        SIZE,
+        INDICES,
+        SIZE,
+        ctypes.POINTER(Settings),
+        FLOATS,
+        SIZE,
+        FLOATS,
+        INDICES,
+    ]
     for function in (loaded.assign, loaded.accumulate, loaded.train):
         function.restype = ctypes.c_int
     return loaded
@@ -99,12 +111,25 @@ def accumulate(rows: Matrix, labels: Labels, k: int) -> tuple[Matrix, Matrix]:
     return sums, counts
 
 
-def train(x: Matrix, k: int, plan: list[int], settings: Settings) -> tuple[Matrix, int]:
+def train(x: Matrix, k: int, plan: list[int], settings: Settings, init: Matrix | None) -> tuple[Matrix, int]:
     n, dims = x.shape
     centroids = np.empty((k, dims), dtype=np.float32)
     work = np.zeros(1, dtype=np.int64)
     rows = np.asarray(plan, dtype=np.int64)
+    start = np.empty(0, dtype=np.float32) if init is None else np.ascontiguousarray(init, dtype=np.float32)
     check(
-        library().train(np.ascontiguousarray(x), n, dims, k, rows, len(rows), ctypes.byref(settings), centroids, work)
+        library().train(
+            np.ascontiguousarray(x),
+            n,
+            dims,
+            k,
+            rows,
+            len(rows),
+            ctypes.byref(settings),
+            start,
+            0 if init is None else len(start),
+            centroids,
+            work,
+        )
     )
     return centroids, int(work[0])

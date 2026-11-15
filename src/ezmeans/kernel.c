@@ -483,8 +483,8 @@ static int64_t padded_width(int64_t dims, int sampling)
     return (dims + CHUNK - 1) / CHUNK * CHUNK;
 }
 
-int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *plan, int64_t epochs, const Settings *settings, float *out,
-          int64_t *work)
+int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *plan, int64_t epochs, const Settings *settings,
+          const float *init, int64_t init_count, float *out, int64_t *work)
 {
     const int64_t rounded = llround(sqrt((double)k));
     const int64_t group_count = rounded > 1 ? rounded : 1;
@@ -495,7 +495,7 @@ int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *pla
         return BAD_DIMS;
     if (settings->probes < 1 || settings->probes > MAX_PROBES || settings->probes > group_count)
         return BAD_PROBES;
-    if (k < 1 || k > n || settings->batch < 1 || settings->check_every < 1 || epochs < 1)
+    if (k < 1 || k > n || settings->batch < 1 || settings->check_every < 1 || epochs < 1 || (init_count != 0 && init_count != k))
         return BAD_SIZE;
     const size_t table = (size_t)(k * width);
     const int64_t batch = settings->batch;
@@ -543,7 +543,15 @@ int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *pla
     if (status == DONE) {
         permute(order, n, &state);
         for (int64_t c = 0; c < k; c++) {
-            memcpy(centroids + c * width, data + order[c] * width, (size_t)width * sizeof *centroids);
+            float *centroid = centroids + c * width;
+            if (init_count) {
+                memcpy(centroid, init + c * dims, (size_t)dims * sizeof *centroid);
+                memset(centroid + dims, 0, (size_t)(width - dims) * sizeof *centroid);
+                if (sampling)
+                    rotate(centroid, signs, width);
+            } else {
+                memcpy(centroid, data + order[c] * width, (size_t)width * sizeof *centroid);
+            }
             usage[c] = (float)settings->init_usage;
         }
         for (int64_t e = 0; e < epochs; e++)

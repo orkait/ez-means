@@ -12,7 +12,15 @@ from ezmeans.reference import (
 )
 
 
-def ez_means(x: Floats, k: int, recipe: Recipe, probes: int, sampling: float | None = None) -> tuple[Matrix, float]:
+def ez_means(
+    x: Floats,
+    k: int,
+    recipe: Recipe,
+    probes: int,
+    sampling: float | None = None,
+    init: Matrix | None = None,
+    init_usage: float = INIT_USAGE,
+) -> tuple[Matrix, float]:
     settings = kernel.Settings(
         batch=recipe.batch,
         probes=probes,
@@ -22,9 +30,9 @@ def ez_means(x: Floats, k: int, recipe: Recipe, probes: int, sampling: float | N
         alpha0=recipe.alpha0,
         alpha_min_factor=ALPHA_MIN_FACTOR,
         tau=recipe.tau,
-        init_usage=INIT_USAGE,
+        init_usage=init_usage,
         split_epsilon=SPLIT_EPSILON,
         ad_epsilon=sampling or 0.0,
     )
-    centroids, work = kernel.train(x, k, epoch_rows(len(x), recipe.epochs), settings)
+    centroids, work = kernel.train(x, k, epoch_rows(len(x), recipe.epochs), settings, init)
     return centroids, work / x.shape[1]
