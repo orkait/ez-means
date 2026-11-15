@@ -29,7 +29,7 @@ import numpy as np
 from ezmeans.recipe import law_recipe
 from ezmeans.trainer import ez_means
 x = np.random.default_rng({SEED}).standard_normal(({ROWS}, {DIMS})).astype(np.float32)
-centroids, _ = ez_means(x, {CLUSTERS}, law_recipe(len(x), {CLUSTERS}, {EPOCHS}, {SEED}), {PROBES})
+centroids = ez_means(x, {CLUSTERS}, law_recipe(len(x), {CLUSTERS}, {EPOCHS}, {SEED}), {PROBES})
 sys.stdout.write(hashlib.sha256(centroids.tobytes()).hexdigest())
 """
 BLOCK_FAISS = 'import sys\nsys.modules["faiss"] = None\n'
@@ -49,11 +49,11 @@ def round_robin() -> Labels:
     return np.arange(CLUSTERS, dtype=np.int64) % GROUPS
 
 
-def fit(x: Matrix, init: Matrix | None = None, epochs: float = EPOCHS) -> tuple[Matrix, float]:
+def fit(x: Matrix, init: Matrix | None = None, epochs: float = EPOCHS) -> Matrix:
     return ez_means(x, CLUSTERS, law_recipe(ROWS, CLUSTERS, epochs, SEED), PROBES, init=init)
 
 
-def search(x: Matrix, homes: Labels, probes: int = GROUPS) -> tuple[Matrix, Labels, int]:
+def search(x: Matrix, homes: Labels, probes: int = GROUPS) -> tuple[Matrix, Labels]:
     centroids = np.ascontiguousarray(x[:CLUSTERS])
     return kernel.assign(x, centroids[:GROUPS], centroids, homes, probes)
 
@@ -62,7 +62,7 @@ def search(x: Matrix, homes: Labels, probes: int = GROUPS) -> tuple[Matrix, Labe
 @pytest.mark.parametrize("dims", [16, 64, 128])
 def test_probing_every_occupied_group_is_brute_force(dims: int, occupied: int) -> None:
     x = points(dims)
-    _, labels, _ = search(x, round_robin() % occupied, occupied)
+    _, labels = search(x, round_robin() % occupied, occupied)
     wide, centers = x.astype(np.float64), x[:CLUSTERS].astype(np.float64)
     squared = (wide**2).sum(axis=1)[:, None] - 2.0 * wide @ centers.T + (centers**2).sum(axis=1)[None, :]
     assert np.array_equal(labels, squared.argmin(axis=1))
@@ -110,8 +110,8 @@ def test_zero_padding_does_not_change_centroids(dims: int) -> None:
     padded = np.zeros((ROWS, width), dtype=np.float32)
     padded[:, :dims] = x
     recipe = law_recipe(ROWS, CLUSTERS, EPOCHS, SEED)
-    centroids, _ = ez_means(x, CLUSTERS, recipe, PROBES)
-    reference, _ = ez_means(padded, CLUSTERS, recipe, PROBES)
+    centroids = ez_means(x, CLUSTERS, recipe, PROBES)
+    reference = ez_means(padded, CLUSTERS, recipe, PROBES)
     assert np.array_equal(centroids, reference[:, :dims])
 
 

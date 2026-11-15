@@ -34,13 +34,13 @@ from ezmeans.recipe import law_recipe
 from ezmeans.trainer import ez_means
 
 x = np.random.default_rng(0).standard_normal((100_000, 128)).astype(np.float32)
-centroids, work = ez_means(x, 1024, law_recipe(len(x), 1024, 2, 0), 4)
+centroids = ez_means(x, 1024, law_recipe(len(x), 1024, 2, 0), 4)
 ```
 
 | Call | Returns |
 |---|---|
 | `law_recipe(n, k, epochs, seed)` | the batch size and step size from the e-means scaling law |
-| `ez_means(x, k, recipe, probes, init=None)` | the `k × d` centroids and the distance work in full-distance units; `init` is an optional `k × d` start |
+| `ez_means(x, k, recipe, probes, init=None)` | the `k × d` centroids; `init` is an optional `k × d` start |
 
 The first call compiles `src/ezmeans/kernel.c` with `gcc` into `~/.cache/ezmeans/`. Fewer probes is faster and can miss a point's nearest centroid; probing every group is exact.
 

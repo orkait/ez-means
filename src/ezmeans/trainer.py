@@ -11,7 +11,7 @@ from ezmeans.recipe import (
 )
 
 
-def ez_means(x: Matrix, k: int, recipe: Recipe, probes: int, init: Matrix | None = None) -> tuple[Matrix, float]:
+def ez_means(x: Matrix, k: int, recipe: Recipe, probes: int, init: Matrix | None = None) -> Matrix:
     settings = kernel.Settings(
         batch=recipe.batch,
         probes=probes,
@@ -24,5 +24,4 @@ def ez_means(x: Matrix, k: int, recipe: Recipe, probes: int, init: Matrix | None
         init_usage=INIT_USAGE,
         split_epsilon=SPLIT_EPSILON,
     )
-    centroids, work = kernel.train(x, k, epoch_rows(len(x), recipe.epochs), settings, init)
-    return centroids, work / x.shape[1]
+    return kernel.train(x, k, epoch_rows(len(x), recipe.epochs), settings, init)

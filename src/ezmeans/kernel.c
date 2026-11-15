@@ -120,7 +120,7 @@ static inline void square_into(float *acc, float value, const float *lanes)
     }
 }
 
-static inline int scan(const float *row, const float *tile, int64_t dims, float bound, float *total, int64_t *work)
+static inline int scan(const float *row, const float *tile, int64_t dims, float bound, float *total)
 {
     float a0[LANES] = {0.0f}, a1[LANES] = {0.0f}, a2[LANES] = {0.0f}, a3[LANES] = {0.0f};
     int alive;
@@ -140,7 +140,6 @@ static inline int scan(const float *row, const float *tile, int64_t dims, float 
             alive |= total[lane] < bound;
         }
     } while (alive && j < dims);
-    *work += j * LANES;
     return alive;
 }
 
@@ -157,8 +156,7 @@ static void insert(float *near, int64_t *which, int64_t probes, float value, int
     which[at] = id;
 }
 
-static void probe(const float *row, const Tiles *groups, const Tiles *cells, int64_t dims, int64_t probes, float *near, int64_t *which,
-                  int64_t *work)
+static void probe(const float *row, const Tiles *groups, const Tiles *cells, int64_t dims, int64_t probes, float *near, int64_t *which)
 {
     for (int64_t p = 0; p < probes; p++) {
         near[p] = INFINITY;
@@ -167,7 +165,7 @@ static void probe(const float *row, const Tiles *groups, const Tiles *cells, int
     float total[LANES];
     for (int64_t t = 0; t < groups->first[1]; t++) {
         const float bound = near[probes - 1];
-        if (!scan(row, groups->values + t * dims * LANES, dims, bound, total, work))
+        if (!scan(row, groups->values + t * dims * LANES, dims, bound, total))
             continue;
         for (int lane = 0; lane < LANES; lane++) {
             const int64_t id = groups->ids[t * LANES + lane];
@@ -178,13 +176,13 @@ static void probe(const float *row, const Tiles *groups, const Tiles *cells, int
 }
 
 static void nearest(const float *row, const Tiles *cells, int64_t dims, const int64_t *which, int64_t probes, float *best,
-                    int64_t *label, int64_t *work)
+                    int64_t *label)
 {
     float bound = INFINITY, total[LANES];
     int64_t found = -1;
     for (int64_t p = 0; p < probes && which[p] >= 0; p++)
         for (int64_t t = cells->first[which[p]]; t < cells->first[which[p] + 1]; t++) {
-            if (!scan(row, cells->values + t * dims * LANES, dims, bound, total, work))
+            if (!scan(row, cells->values + t * dims * LANES, dims, bound, total))
                 continue;
             for (int lane = 0; lane < LANES; lane++)
                 if (total[lane] < bound) {
@@ -196,21 +194,17 @@ static void nearest(const float *row, const Tiles *cells, int64_t dims, const in
     *label = found;
 }
 
-static int64_t label_rows(const float *x, const int64_t *index, int64_t count, int64_t dims, const Tiles *groups, const Tiles *cells,
-                          int64_t probes, float *best, int64_t *labels)
+static void label_rows(const float *x, const int64_t *index, int64_t count, int64_t dims, const Tiles *groups, const Tiles *cells,
+                       int64_t probes, float *best, int64_t *labels)
 {
-    int64_t total = 0;
-#pragma omp parallel for schedule(dynamic, ROW_CHUNK) reduction(+ : total)
+#pragma omp parallel for schedule(dynamic, ROW_CHUNK)
     for (int64_t r = 0; r < count; r++) {
         float near[MAX_PROBES];
         int64_t which[MAX_PROBES];
         const float *row = x + index[r] * dims;
-        int64_t scanned = 0;
-        probe(row, groups, cells, dims, probes, near, which, &scanned);
-        nearest(row, cells, dims, which, probes, best + r, labels + r, &scanned);
-        total += scanned;
+        probe(row, groups, cells, dims, probes, near, which);
+        nearest(row, cells, dims, which, probes, best + r, labels + r);
     }
-    return total;
 }
 
 static int all_found(const int64_t *labels, int64_t count)
@@ -263,7 +257,7 @@ static int sum_rows(const float *x, const int64_t *index, int64_t count, int64_t
 }
 
 int assign(const float *rows, int64_t count, int64_t dims, const float *groups, int64_t group_count, const float *centroids,
-           const int64_t *order, const int64_t *offsets, int64_t probes, float *best, int64_t *label, int64_t *work)
+           const int64_t *order, const int64_t *offsets, int64_t probes, float *best, int64_t *label)
 {
     if (probes < 1 || probes > MAX_PROBES || probes > group_count)
         return BAD_PROBES;
@@ -277,7 +271,7 @@ int assign(const float *rows, int64_t count, int64_t dims, const float *groups, 
     if (status == DONE)
         status = tile(centroids, order, offsets, group_count, dims, &cell_tiles);
     if (status == DONE) {
-        *work = label_rows(rows, index, count, dims, &group_tiles, &cell_tiles, probes, best, label);
+        label_rows(rows, index, count, dims, &group_tiles, &cell_tiles, probes, best, label);
         status = all_found(label, count);
     }
     free(index);
@@ -295,7 +289,7 @@ int accumulate(const float *rows, int64_t count, int64_t dims, const int64_t *la
 }
 
 static int regroup(const float *centroids, int64_t k, int64_t dims, const Settings *settings, float *groups, int64_t group_count,
-                   int64_t *homes, int64_t *order, int64_t *offsets, int64_t *work)
+                   int64_t *homes, int64_t *order, int64_t *offsets)
 {
     int64_t *pool = identity(k);
     double *sums = malloc((size_t)(group_count * dims) * sizeof *sums);
@@ -314,13 +308,11 @@ static int regroup(const float *centroids, int64_t k, int64_t dims, const Settin
         status = tile_all(groups, group_count, dims, &tiles);
         if (status == DONE) {
             const int64_t only[1] = {0};
-            int64_t total = 0;
-#pragma omp parallel for schedule(dynamic, ROW_CHUNK) reduction(+ : total)
+#pragma omp parallel for schedule(dynamic, ROW_CHUNK)
             for (int64_t c = 0; c < k; c++) {
                 float best;
-                nearest(centroids + c * dims, &tiles, dims, only, 1, &best, homes + c, &total);
+                nearest(centroids + c * dims, &tiles, dims, only, 1, &best, homes + c);
             }
-            *work += total;
             status = all_found(homes, k);
         }
         release(&tiles);
@@ -442,7 +434,7 @@ static double scheduled(const Settings *settings, int64_t step, int64_t total)
 }
 
 int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *plan, int64_t epochs, const Settings *settings,
-          const float *init, int64_t init_count, float *out, int64_t *work)
+          const float *init, int64_t init_count, float *out)
 {
     if (dims < 1)
         return BAD_DIMS;
@@ -482,7 +474,6 @@ int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *pla
     uint64_t state = settings->seed;
     uint64_t revival = next(&state);
     int64_t steps = 0, step = 0, searches = 0;
-    *work = 0;
     if (status == DONE) {
         permute(order, n, &state);
         for (int64_t c = 0; c < k; c++) {
@@ -511,7 +502,7 @@ int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *pla
             }
             if (searches % settings->check_every == 0) {
                 release(&group_tiles);
-                status = regroup(centroids, k, width, settings, groups, group_count, homes, cell_order, offsets, work);
+                status = regroup(centroids, k, width, settings, groups, group_count, homes, cell_order, offsets);
                 if (status == DONE)
                     status = tile_all(groups, group_count, width, &group_tiles);
             }
@@ -519,7 +510,7 @@ int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *pla
             if (status == DONE)
                 status = tile(centroids, cell_order, offsets, group_count, width, &cell_tiles);
             if (status == DONE) {
-                *work += label_rows(rows, index, count, width, &group_tiles, &cell_tiles, settings->probes, best, labels);
+                label_rows(rows, index, count, width, &group_tiles, &cell_tiles, settings->probes, best, labels);
                 status = all_found(labels, count);
             }
             if (status == DONE)
