@@ -41,25 +41,34 @@ centroids, work = ez_means(x, 1024, law_recipe(len(x), 1024, 2, 0), 4)
 
 ## 📊 Results
 
-All runs used 4 cores. Details, every table and the dead ends are in [`results/RESULTS.md`](results/RESULTS.md).
+Details, every table and the dead ends are in [`results/RESULTS.md`](results/RESULTS.md).
 
-The race measures time to reach Lloyd-25 test MSE within 0.1% (SIFT1M, k=4096, median of 2 seeds):
+The race measures time to reach Lloyd-25 test MSE within 0.1% (SIFT1M, k=4096, median of 2 seeds, 4 threads):
 
-| Method | Zen 5 (Ryzen 9700X) | Zen 3 (EPYC, Modal) |
-|---|---:|---:|
-| faiss Lloyd, 25 iterations | 109.0 s | 150.8 s |
-| faiss SuperKMeans, 25 iterations | 85.2 s | 184.0 s |
-| scikit-learn KMeans, 25 iterations | 43.6 s | 83.3 s |
-| e-means, the faiss implementation | 10.9 s | 15.2 s |
-| **ez-means** | **1.57 s** | **3.22 s** |
+| Method | Zen 5 (Ryzen 9700X) | Zen 3 (EPYC, Modal) | Broadwell (Xeon 2.2 GHz, Kaggle) |
+|---|---:|---:|---:|
+| faiss Lloyd, 25 iterations | 109.0 s | 150.8 s | 281.1 s |
+| faiss SuperKMeans, 25 iterations | 85.2 s | 184.0 s | 285.7 s |
+| scikit-learn KMeans, 25 iterations | 43.6 s | 83.3 s | 302.6 s |
+| e-means, the faiss implementation | 10.9 s | 15.2 s | 28.5 s |
+| **ez-means** | **1.57 s** | **3.22 s** | **8.63 s** |
 
-The paper's own 1M protocol uses its test rows and per-seed targets, with k=16384 and seeds 10-12:
+The paper's own 1M protocol uses its test rows and per-seed targets, with k=16384 and the paper's 10 seeds (10-19), on 16 Zen 3 cores:
 
-| Dataset | e-means crossing, seconds | ez-means crossing, seconds | Speedup |
+| Dataset | e-means: mean crossing, median seconds | ez-means: mean crossing, median seconds | Paired speedup, median (min-max) |
 |---|---|---|---:|
-| DEEP 1M | 2.0 epochs, 27.0 s | 2.0 epochs, 1.8 s | 15x |
-| SSNPP 1M | 1.4 epochs, 46.1 s | 1.4 epochs, 4.4 s | 10.5x |
-| SPACEV 1M | 2.2 epochs, 29.9 s | 2.6 epochs, 3.7 s (8 probes) | 8x |
+| DEEP 1M | 1.94 epochs, 18.9 s | 2.14 epochs, 1.4 s | 13.8x (10.5-20.6) |
+| SSNPP 1M | 1.40 epochs, 29.8 s | 1.42 epochs, 3.3 s | 9.0x (7.4-10.5) |
+| SPACEV 1M | 2.30 epochs, 30.1 s | 2.56 epochs, 2.8 s (8 probes) | 11.1x (8.9-15.8) |
+
+On GPU, `experiments/gpu.py` swaps faiss' brute-force assignment for two Triton kernels that do the grouped search, and keeps the rest of faiss' GPU e-means:
+
+| Setting | faiss GPU e-means | ez-means GPU | Speedup |
+|---|---:|---:|---:|
+| DEEP 1M, k=16384, RTX 3060, 10 seeds | 0.46 s (Triton) | 0.17 s | 2.8x |
+| DEEP 10M, k=65536, RTX 3060, 3 seeds | 25.1 s (Triton) | 2.9 s | 8.6x |
+| DEEP 10M, k=65536, H100, 3 seeds | 2.60 s (CuTe) | 0.47 s | 5.5x |
+| 1M, k=16384, H100 | 0.04-0.06 s (CuTe) | 0.12-0.16 s | slower |
 
 ## 📦 Installation
 
@@ -91,6 +100,7 @@ uv run pytest
 |---|---|
 | `race.py` | time to Lloyd-25 quality against faiss, scikit-learn and e-means |
 | `paper_cpu.py` | epoch crossings on the paper's 1M (and 10M) protocol |
+| `gpu.py` | the same protocol on GPU, faiss GPU e-means against ez-means' Triton kernels (`uv sync --group gpu`, CUDA) |
 | `fused_time.py` | exact, grouped and ez-means wall time and distance work |
 | `approximate.py` | whether approximate assignment hurts Lloyd or e-means after training |
 | `adsampling.py` | ADSampling pruning with a fast Hadamard rotation |
@@ -101,7 +111,7 @@ uv run pytest
 | `swap.py`, `generality.py`, `tuning.py`, `real.py`, `anatomy.py`, `baseline.py`, `compare.py` | revival variants and the failure anatomy on clustered data |
 | `bounds.py`, `margins.py`, `prefix.py`, `stack.py`, `budget.py`, `ivf.py`, `hierarchy.py`, `grouped.py`, `lowbits.py` | speed ideas, including the ones that did not pay |
 
-`cloud/modal_jobs.py` runs the race, a CPU probe and the 10M protocol on [Modal](https://modal.com): `uv run --group cloud modal run cloud/modal_jobs.py --job race`.
+`cloud/modal_jobs.py` runs the race, a CPU probe, the paper protocol and the H100 GPU protocol on [Modal](https://modal.com): `uv run --group cloud modal run cloud/modal_jobs.py --job race` (or `--job paper --dataset deep1b-1M --arms e-means,ez-means`, or `--job gpu --dataset deep1b-10M --arms 0,16`).
 
 </details>
 
@@ -109,11 +119,12 @@ uv run pytest
 
 | Limitation | Evidence |
 |---|---|
-| The race covers one dataset (SIFT1M) at one k | `results/RESULTS.md` sections 5, 7 and 12 |
-| A fixed 4 probes is too few for SPACEV at k=16384 | section 10: 8 probes are needed |
-| The lead over e-means depends on the CPU: about 10x at equal epochs on Zen 5, 5.5-7x on Zen 3 | section 12 |
+| The race covers one dataset (SIFT1M) at one k | `results/RESULTS.md` sections 5, 7, 12 and 15 |
+| A fixed 4 probes is too few for SPACEV at k=16384, and k=65536 needs 16 | sections 10, 16 and 17 |
+| The lead over e-means at the race target depends on the CPU: 6.9x on Zen 5, 4.7x on Zen 3, 3.3x on Broadwell | sections 7, 12 and 15 |
+| On an H100 at 1M, faiss' CuTe kernels are faster than ez-means' GPU path | section 17 |
+| The GPU path lives in `experiments/gpu.py` and sets a private attribute of faiss' `TorchEmeans` to swap the assignment backend | section 17 |
 | Tested only on Linux x86-64 with gcc. ARM, macOS and Windows are untested | none yet |
-| The 10M / k=65536 protocol is still running | none yet |
 
 ## 🙏 Credits
 

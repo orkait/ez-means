@@ -9,7 +9,18 @@ ez-means is our faster version of the e-means clustering algorithm (Bessa et al.
 | Accumulation | a counting sort replaces `np.add.at` |
 | The loop | the whole training loop is portable C11, with no hardware-specific code |
 
-On SIFT1M, at k=4096 on 4 cores, ez-means reaches Lloyd-25 quality 128x faster than faiss Lloyd, 50x faster than sklearn KMeans and 11.7x faster than the paper's e-means (section 5, AVX-512 build). The portable build gives the same bits on every compiler and SIMD level, and costs 16-22% against intrinsics (section 6). These numbers come from one machine, one dataset and one k.
+On SIFT1M, at k=4096 on 4 cores, ez-means reaches Lloyd-25 quality 128x faster than faiss Lloyd, 50x faster than sklearn KMeans and 11.7x faster than the paper's e-means (section 5, AVX-512 build). The portable build gives the same bits on every compiler and SIMD level, and costs 16-22% against intrinsics (section 6).
+
+The lead holds across machines, datasets and seeds:
+
+| Setting | ez-means against | Speedup | Section |
+|---|---|---|---|
+| SIFT1M k=4096, three CPUs (Zen 5, Zen 3, Broadwell), portable build | faiss Lloyd, SuperKMeans, sklearn | 26-76x | 7, 12, 15 |
+| same | paper e-means | 3.3-6.9x | 7, 12, 15 |
+| paper protocol, DEEP / SSNPP / SPACEV 1M, k=16384, 10 seeds, 16 Zen 3 cores | paper e-means | 13.8x / 9.0x / 11.1x (paired medians) | 16 |
+| same protocol, RTX 3060 | faiss GPU e-means (Triton) | 2.8x / 1.8x / 1.8x | 17 |
+| DEEP 10M, k=65536, RTX 3060 / H100 | faiss GPU e-means (Triton / CuTe) | 8.6x / 5.5x | 17 |
+| 1M, k=16384, H100 | faiss GPU e-means (CuTe) | 0.25-0.4x: ez-means is slower | 17 |
 
 A second axis is reliability. A verified swap revival takes cluster-structured data to oracle quality in 2-5 epochs, but on SIFT it does not pay (section 2).
 
@@ -371,13 +382,125 @@ Quality holds: test MSE is within 0.04% of exact at k 4096 and 16384. perf shows
 
 Making it pay needs group-ordered codes and lane-parallel estimates, and the vector popcount that only AVX-512 VPOPCNTDQ and ARM NEON provide. It stays experimental.
 
+## 15. Third machine: Kaggle, Intel Broadwell (`race.py --round remote`)
+
+A Kaggle CPU notebook reports an Intel Xeon at 2.2 GHz, family 6 model 79 (Broadwell), 2 cores with 2 threads each, AVX2 and FMA, no AVX-512. It runs the same race as section 12 with 4 threads, faiss 1.16.0, numpy 2.1.3 and sklearn 1.6.1 from the notebook image:
+
+| Method | Budget | Test MSE / Lloyd-25 | Seconds | ez-means faster by |
+|---|---|---|---|---|
+| faiss Lloyd | 25 it | 1.0000 | 281.10 | 32.6x |
+| faiss SuperKMeans | 25 it | 1.0001 | 285.67 | 33.1x |
+| sklearn KMeans | 25 it | 1.0004 | 302.61 | 35.1x |
+| faiss e-means (paper) | T=2 | 1.0003 | 28.50 | 3.3x |
+| faiss e-means (paper) | T=3 | 0.9996 | 40.51 | 4.7x at equal epochs |
+| ez-means | T=3 | 1.0000 | 8.63 | |
+
+With the portable kernel, the lead over classical k-means holds on all three machines: 28-76x on Zen 5 (section 7), 26-57x on Zen 3 (section 12) and 33-35x on Broadwell. The lead over paper e-means at the time-to-target shrinks as the CPU gets older and narrower: 6.9x on Zen 5, 4.7x on Zen 3 and 3.3x on Broadwell. ez-means T=2 (7.69 s) is not comparable here: its median includes the first-call kernel compile.
+
+## 16. The paper protocol with 10 seeds (`paper_cpu.py --seeds`, `modal_jobs.py --job paper`)
+
+Section 10 used 3 seeds. The paper uses seeds 10-19, so this repeats the protocol on all 10, on a Modal container with 16 Zen 3 cores (AMD family 25 model 1) and 16 OpenMP threads, k=16384. Each dataset ran in its own container. Seconds are wall seconds of the crossing run. The speedup is paired: the same seed's e-means time over its ez-means time.
+
+| Dataset | Arm | Crossings, seeds 10-19 | Crossing mean ± sd | Seconds, median (mean ± sd) | Paired speedup, median (min-max) |
+|---|---|---|---|---|---|
+| DEEP 1M | e-means | 1.8, 1.8, 2, 2.8, 1.8, 2, 1.8, 1.6, 2.2, 1.6 | 1.94 ± 0.35 | 18.9 (20.7 ± 4.9) | |
+| | ez-means p4 | 2, 2, 2.2, 2.8, 1.8, 2, 2.2, 1.8, 2.6, 2 | 2.14 ± 0.33 | 1.4 (1.45 ± 0.13) | 13.8x (10.5-20.6) |
+| SSNPP 1M | e-means | 1.4 on all 10 | 1.40 ± 0 | 29.8 (29.5 ± 2.8) | |
+| | ez-means p4 | 1.4 on 9, 1.6 on 1 | 1.42 ± 0.06 | 3.3 (3.31 ± 0.19) | 9.0x (7.4-10.5) |
+| SPACEV 1M | e-means | 2.2, 2.6, 2.2, 2.6, 2.2, 2, 2.2, 2, 2.4, 2.6 | 2.30 ± 0.24 | 30.1 (31.5 ± 5.6) | |
+| | ez-means p8 | 2.6, 2.6, 2.6, 2.6, 2.6, 2.6, 2.8, 2, 2.4, 2.8 | 2.56 ± 0.23 | 2.8 (2.74 ± 0.21) | 11.1x (8.9-15.8) |
+
+Over 10 seeds ez-means is 9-14x faster than e-means at the paper's targets on this CPU, and never slower than 7.4x on any seed. It needs 0.02-0.26 more epochs on average, and the extra epochs cost less than the faster assignment saves. The ez-means time also varies less across seeds (sd 0.13-0.21 s against 2.8-5.6 s).
+
+## 17. ez-means on GPU (`gpu.py`)
+
+faiss runs e-means on GPU through PyTorch with its own kernels: Triton on A100-class and newer cards, CuTe on H100. Both compute every point against every centroid in BF16 with FP32 accumulation. Its CuTe "grouped" path is still exact: it finds each row's best centroid tile in a full scan, then recovers the id inside that tile. So the question is whether ez-means' approximate grouped assignment also pays on a GPU, where the brute-force GEMM runs near the hardware's peak.
+
+`gpu.py` keeps faiss' training loop (`TorchEmeans`: batch law, EMA, revival, last-epoch mean) and replaces only its assignment backend with two Triton kernels:
+
+| Kernel | Work |
+|---|---|
+| select | for a tile of rows: BF16 dots against the √k group centers with FP32 accumulation, the top p groups, and the row norms, in one pass |
+| member | (row, group) pairs are sorted by group; each program takes up to 64 pairs of one group and scans that group's members in 64-centroid tiles with `tl.dot` |
+
+Groups are rebuilt every 5 batches with 10 Lloyd iterations over the centroids, as in the C loop. The plumbing is on the GPU, with no host synchronization per batch: block tables come from `searchsorted` over a fixed upper bound of blocks, and empty blocks return at once. On fixed random centroids, probing all groups matches exact FP32 labels 1.0000 (50k rows), so the kernels are exact when nothing is pruned.
+
+On an RTX 3060 (12 GB, BF16 dense peak with FP32 accumulation about 25 TFLOPS), faiss' Triton brute force runs at about 19 TFLOPS at k=4096. A perfect brute-force kernel could therefore be at most about 1.35x faster than this baseline. The paper protocol with 10 seeds at k=16384, in GPU seconds of the crossing run:
+
+| Dataset | Arm | Crossing mean ± sd | Seconds, median | Paired speedup, median (min-max) |
+|---|---|---|---|---|
+| DEEP 1M | faiss GPU e-means (Triton) | 1.92 ± 0.27 | 0.46 | |
+| | ez-means GPU p4 | 2.12 ± 0.39 | 0.17 | 2.8x (2.3-3.3) |
+| | ez-means GPU p8 | 1.98 ± 0.33 | 0.22 | 2.1x (2.0-2.4) |
+| SSNPP 1M | faiss GPU e-means (Triton) | 1.40 ± 0 | 0.71 | |
+| | ez-means GPU p4 | 1.78 ± 0.11 | 0.39 | 1.8x (1.6-1.9) |
+| | ez-means GPU p8 | 1.52 ± 0.10 | 0.48 | 1.5x (1.3-1.8) |
+| SPACEV 1M | faiss GPU e-means (Triton) | 2.30 ± 0.19 | 0.58 | |
+| | ez-means GPU p4 | never by 3.0 on 4 of 10 seeds | | fails |
+| | ez-means GPU p8 | 2.72 ± 0.17 | 0.30 | 1.8x (1.7-2.1) |
+
+Every speedup is above the 1.35x a perfect brute-force kernel could reach.
+
+A crossing protocol can flatter a method that drops fast and then stalls. `gpu.py --curve` trains seed 10 to 1, 1.5, 2, 3, 4 and 6 epochs and also counts empty clusters (no training point under exact FP32 assignment). Test MSE over the seed-10 target, and GPU seconds:
+
+| Dataset | Epochs | faiss GPU e-means | ez-means GPU p4 | ez-means GPU p8 |
+|---|---|---|---|---|
+| DEEP | 1 | 1.0126, 0.24 s | 1.0147, 0.10 s | 1.0125, 0.13 s |
+| | 2 | 0.9989, 0.48 s | 1.0014, 0.18 s | 0.9975, 0.24 s |
+| | 3 | 0.9976, 0.69 s | 0.9984, 0.21 s | 0.9953, 0.27 s |
+| | 6 | 0.9965, 1.38 s | 0.9947, 0.30 s | 0.9936, 0.47 s |
+| SSNPP | 1 | 1.0037, 0.49 s | 1.0057, 0.23 s | 1.0047, 0.35 s |
+| | 2 | 0.9973, 1.02 s | 0.9989, 0.44 s | 0.9985, 0.63 s |
+| | 3 | 0.9953, 1.43 s | 0.9968, 0.44 s | 0.9960, 0.70 s |
+| | 6 | 0.9945, 2.73 s | 0.9948, 0.77 s | 0.9938, 1.29 s |
+| SPACEV | 1 | 1.0200, 0.25 s | 1.0244, 0.11 s | 1.0227, 0.14 s |
+| | 2 | 1.0001, 0.52 s | 1.0031, 0.22 s | 1.0008, 0.26 s |
+| | 3 | 0.9957, 0.74 s | 0.9984, 0.23 s | 0.9976, 0.33 s |
+| | 6 | 0.9903, 1.46 s | 0.9942, 0.37 s | 0.9923, 0.54 s |
+
+ez-means keeps improving out to 6 epochs. Within the range it was run, it is ahead at equal GPU seconds on all three datasets: on SPACEV, p8 reaches 0.9923 in 0.54 s while faiss reaches 1.0001 in 0.52 s. At equal epochs it is behind by up to 0.4% on SPACEV and level or ahead on DEEP. Its floor is not measured: faiss at 6 epochs on SPACEV (0.9903, 1.46 s) is better than anything ez-means reached by 6 epochs. Empty clusters are the same for both: 2-37 after one epoch, falling to 0-2 from 2 epochs on, so the revival keeps working with pruned assignment. The GPU version needs more epochs than the CPU one: on SSNPP, p4 crosses at 1.78 on GPU against 1.42 on CPU (section 16). The cause is not isolated. The first suspect is the BF16 group selection, which the CPU loop does in FP32.
+
+### Scale: DEEP 10M, k=65536, and the H100
+
+k=65536 has 256 groups. On the RTX 3060, 3 seeds (10-12), against the seeds' targets; "never" means not by 3.0 epochs, and its time is the 3.0-epoch run:
+
+| Arm | Crossings | Seconds per seed | Paired speedup, median |
+|---|---|---|---|
+| faiss GPU e-means (Triton) | 2.6, never, 2.8 | 23.0, 26.8, 25.1 | |
+| ez-means GPU p8 | 2.4, 3, 2.6 | 2.6, 3.4, 2.9 | 8.6x |
+
+Then on a Modal H100 80GB, with BF16 input so that faiss selects its CuTe kernels, the fastest path it has (`modal_jobs.py --job gpu`, 3 seeds):
+
+| Dataset | faiss GPU e-means (CuTe): crossing, s | ez-means GPU: arm, crossing, s | ez-means faster by |
+|---|---|---|---|
+| DEEP 1M, k=16384 | 2, 0.05 | p4, 2, 0.16 | 0.3x (slower) |
+| SSNPP 1M | 1.4, 0.06 | p16, 1.4, 0.15 | 0.4x (slower) |
+| SPACEV 1M | 2.2, 0.04 | p16, 2.2, 0.16 | 0.25x (slower) |
+| DEEP 10M, k=65536 | 2.8, 2.60 (2.60, 2.43, 4.19) | p16, 2.4, 0.47 (0.55, 0.41, 0.47) | 5.5x (paired 4.7-8.9x) |
+
+At 1M the H100 does a full k=16384 epoch in a few milliseconds, and ez-means sits at a floor of 0.12-0.16 s whatever p is. Since the time does not grow with p, it is not arithmetic; the likely cost is the per-batch kernel launches and PyTorch bookkeeping (not profiled on the H100). At 10M and k=65536 the arithmetic dominates again, and ez-means is 5.5x faster than faiss' fastest kernels. p4 and p8 are faster still (0.29 and 0.38 s) but each misses one seed by 3.0 epochs, so p16 (6% of the centroids) is the safe setting at k=65536. Cutting the per-batch launches (CUDA graphs or one persistent kernel) is the open lever for small problems on fast GPUs.
+
+### How the GPU arm got here
+
+The first version, with the group selection in PyTorch, was only 1.1-1.35x faster. v1-v3 were scratch versions and are not in the repo; v4 is `gpu.py`. DEEP p4 at the crossing, 3 seeds, median:
+
+| Version | Seconds | Change |
+|---|---|---|
+| v1 | 0.33 | PyTorch `topk` selection, `cdist` regroup, one host sync per batch |
+| v3 | 0.28 | no host sync, group centers fixed between regroups as in the C loop |
+| v4 (above) | 0.17 | fused select kernel; regroup by GEMM and `argmin`. A profile of v3 had `topk` at 20% of GPU time and `cdist` at 18% |
+
+v2 computed the group scores with a BF16-output GEMM, which rounds them to 8 mantissa bits. SSNPP (d=256, large norms) then never reached its target (1.0040 at 3.0 epochs). v3 restored FP32 scores, and the v4 select kernel keeps FP32 accumulation.
+
 ## Next
 
 | # | Step | Why |
 |---|---|---|
-| 1 | Probes as a function of k (and adaptive per point) | the fixed-p4 excess grows with k; SPACEV at k=16384 needs p8 |
-| 2 | 10 seeds and error bars on the paper protocol | the paper uses seeds 10-19 |
-| 3 | The 10M / k=65536 protocol, and a third CPU (Intel AVX-512 on Modal) | scale and hardware coverage |
+| 1 | Probes as a function of k (and adaptive per point) | the fixed-p4 excess grows with k; SPACEV at k=16384 needs p8 on CPU and GPU |
+| 2 | FP32 group selection on GPU | the GPU arm needs 0.1-0.4 more epochs than the CPU loop (section 17) |
+| 3 | ez-means' floor past 6 epochs on SPACEV | faiss at 6 epochs is 0.2% better than ez-means at 6 (section 17) |
+| 4 | Fewer launches per batch on GPU (CUDA graphs or a persistent kernel) | on an H100 at 1M, faiss CuTe is 2.5-4x faster than ez-means, whose time does not depend on p |
+| 5 | An Intel AVX-512 CPU | every CPU so far is AMD or pre-AVX-512 Intel |
 
 ## Verification
 
@@ -391,3 +514,7 @@ Making it pay needs group-ordered codes and lane-parallel estimates, and the vec
 | `race.py --round large` | section 5 (AVX-512: 647 s wall, 1.27 GB peak); section 7 (portable: 655 s, 1.27 GB) |
 | `race.py --round super` | section 7, 558 s wall, 1.63 GB peak |
 | `projection.py --data sift / ssnpp / dino` | section 8; 5.0, 7.0 and 25.8 s wall; peak 3.3 GB on DINO |
+| `race.py --round remote` in a Kaggle CPU notebook | section 15 |
+| `modal run cloud/modal_jobs.py --job paper --dataset <name> --arms <arms>`, one container per dataset | section 16 |
+| `gpu.py --datasets deep1b-1M fb-ssnpp-1M spacev-1M --seeds 10 ... 19`, `gpu.py --curve` and `gpu.py --datasets deep1b-10M --probes 0 8` on an RTX 3060 (torch 2.15.0, Triton 3.9.0, VRAM capped at 50%) | section 17 |
+| `modal run cloud/modal_jobs.py --job gpu --dataset deep1b-1M,fb-ssnpp-1M,spacev-1M,deep1b-10M --arms 0,4,8,16` (H100 80GB HBM3, CUTLASS DSL 4.7.1, QuACK 0.6.5) | section 17 |

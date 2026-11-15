@@ -92,19 +92,21 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--arms", nargs="+", choices=sorted(ARMS), default=sorted(ARMS))
     parser.add_argument("--datasets", nargs="+", choices=sorted(CLUSTERS), default=list(MILLION))
+    parser.add_argument("--seeds", nargs="+", type=int, default=list(SEEDS))
     options = parser.parse_args()
     chosen = [ARMS[name] for name in options.arms]
     targets = json.loads(PAPER_TARGETS.read_text())["table3"]
     print(
-        "| dataset | arm | crossings per seed | crossing, upper median | paper crossing | error / target at crossing | CPU s at crossing |"
+        "| dataset | arm | crossings per seed | crossing, upper median | paper crossing | error / target at crossing "
+        "| CPU s at crossing, median | CPU s per seed |"
     )
-    print("|---|---|---|---|---|---|---|", flush=True)
+    print("|---|---|---|---|---|---|---|---|", flush=True)
     for name in options.datasets:
         raw, test = paper_data.load(name)
         train = np.ascontiguousarray(paper_data.rows(raw, name))
         for arm in chosen:
             crossings, ratios, times = [], [], []
-            for seed in SEEDS:
+            for seed in options.seeds:
                 target = float(targets[name]["per_seed"][str(seed)]["test_mse"])
                 budget, error, seconds = crossing(train, test, arm, CLUSTERS[name], seed, target)
                 crossings.append(budget)
@@ -113,7 +115,8 @@ def main() -> None:
             upper = sorted(crossings)[len(crossings) // 2]
             print(
                 f"| {name} | {arm.name} | {', '.join(f'{c:g}' for c in crossings)} | {upper:g} | "
-                f"{PAPER_CROSSING.get(name, '-')} | {statistics.median(ratios):.4f} | {statistics.median(times):.1f} |",
+                f"{PAPER_CROSSING.get(name, '-')} | {statistics.median(ratios):.4f} | {statistics.median(times):.1f} | "
+                f"{', '.join(f'{t:.1f}' for t in times)} |",
                 flush=True,
             )
 

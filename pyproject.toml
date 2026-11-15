@@ -16,6 +16,7 @@ dependencies = [
 [dependency-groups]
 dev = ["ruff", "mypy", "pytest"]
 cloud = ["modal==1.6.2"]
+gpu = ["torch==2.15.0", "triton==3.9.0"]
 
 [build-system]
 requires = ["hatchling"]
@@ -34,3 +35,11 @@ known-first-party = ["ezmeans"]
 strict = true
 ignore_missing_imports = true
 untyped_calls_exclude = ["faiss", "sklearn", "scipy"]
+
+[[tool.mypy.overrides]]
+module = ["gpu"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+disallow_untyped_decorators = false
+disallow_subclassing_any = false
