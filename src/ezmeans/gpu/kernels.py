@@ -3,8 +3,10 @@ import triton
 import triton.language as tl
 
 from ezmeans.gpu.constants import (
+    ACCUMULATE_ROWS,
     BUCKET_BLOCK,
     DIM_CHUNK,
+    EMA_ROWS,
     GROUP_BLOCK,
     LLOYD_ROWS,
     MEMBER_TILE,
@@ -27,7 +29,6 @@ def _select(
     center_norms,
     top,
     counts,
-    row_norms,
     D: tl.constexpr,
     DP: tl.constexpr,
     DK: tl.constexpr,
@@ -39,7 +40,6 @@ def _select(
     live = offs < n
     groups = tl.arange(0, GP)
     dots = tl.zeros((BM, GP), tl.float32)
-    norms = tl.zeros((BM,), tl.float32)
     for base in tl.static_range(0, DP, DK):
         cols = base + tl.arange(0, DK)
         a = tl.load(
@@ -48,15 +48,12 @@ def _select(
             other=0.0,
         )
         dots += tl.dot(a, tl.load(centers + groups[None, :] * DP + cols[:, None]))
-        wide = a.to(tl.float32)
-        norms += tl.sum(wide * wide, axis=1)
     score = tl.load(center_norms + groups)[None, :] - 2.0 * dots
     for j in tl.static_range(P):
         pick = tl.argmin(score, axis=1)
         tl.store(top + offs * P + j, pick, mask=live)
         tl.atomic_add(counts + pick, 1, mask=live, sem=RELAXED)
         score = tl.where(groups[None, :] == pick[:, None], float("inf"), score)
-    tl.store(row_norms + offs, norms, mask=live)
 
 
 @triton.jit
@@ -140,7 +137,7 @@ def _member(
 
 
 @triton.jit
-def _reduce(value, ident, row_norms, n, distance, labels, P: tl.constexpr, BLOCK: tl.constexpr):
+def _reduce(value, ident, n, labels, P: tl.constexpr, BLOCK: tl.constexpr):
     offs = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
     live = offs < n
     best = tl.full((BLOCK,), float("inf"), tl.float32)
@@ -150,7 +147,6 @@ def _reduce(value, ident, row_norms, n, distance, labels, P: tl.constexpr, BLOCK
         take = candidate < best
         best = tl.where(take, candidate, best)
         best_id = tl.where(take, tl.load(ident + offs * P + j, mask=live, other=0), best_id)
-    tl.store(distance + offs, best + tl.load(row_norms + offs, mask=live, other=0.0), mask=live)
     tl.store(labels + offs, best_id.to(tl.int64), mask=live)
 
 
@@ -277,6 +273,68 @@ def _publish(centers, sizes, rounded, rounded_norms, G, DP: tl.constexpr, DK: tl
     tl.store(rounded_norms + groups, tl.where(occupied, norms, float("inf")), mask=live)
 
 
+@triton.jit
+def _accumulate(
+    rows, row_stride, labels, n, sums, counts, D: tl.constexpr, DP: tl.constexpr, DK: tl.constexpr, BM: tl.constexpr
+):
+    offs = tl.program_id(0) * BM + tl.arange(0, BM)
+    live = offs < n
+    label = tl.load(labels + offs, mask=live, other=0)
+    tl.atomic_add(counts + label, 1.0, mask=live, sem=RELAXED)
+    for base in tl.static_range(0, DP, DK):
+        cols = base + tl.arange(0, DK)
+        inside = live[:, None] & (cols[None, :] < D)
+        values = tl.load(rows + offs[:, None].to(tl.int64) * row_stride + cols[None, :], mask=inside, other=0.0)
+        tl.atomic_add(sums + label[:, None] * D + cols[None, :], values.to(tl.float32), mask=inside, sem=RELAXED)
+
+
+@triton.jit
+def _ema(
+    centroids,
+    usage,
+    sums,
+    counts,
+    pass_sums,
+    pass_counts,
+    k,
+    alpha,
+    keep,
+    D: tl.constexpr,
+    DP: tl.constexpr,
+    DK: tl.constexpr,
+    BM: tl.constexpr,
+    DECAYS: tl.constexpr,
+    LAST: tl.constexpr,
+):
+    offs = tl.program_id(0) * BM + tl.arange(0, BM)
+    live = offs < k
+    count = tl.load(counts + offs, mask=live, other=0.0)
+    old = tl.load(usage + offs, mask=live, other=0.0)
+    mass = alpha * count
+    if DECAYS:
+        old = old * keep
+        mass += old
+    touched = count > 0
+    weight = tl.where(touched, alpha * count / tl.where(touched, mass, 1.0), 0.0)[:, None]
+    divisor = tl.where(touched, count, 1.0)[:, None]
+    for base in tl.static_range(0, DP, DK):
+        cols = base + tl.arange(0, DK)
+        inside = live[:, None] & (cols[None, :] < D)
+        cells = offs[:, None].to(tl.int64) * D + cols[None, :]
+        total = tl.load(sums + cells, mask=inside, other=0.0)
+        center = tl.load(centroids + cells, mask=inside, other=0.0)
+        mean = total / divisor
+        moved = tl.where(weight == 1.0, mean, center + weight * (mean - center))
+        tl.store(centroids + cells, tl.where(touched[:, None], moved, center), mask=inside)
+        if LAST:
+            tl.store(pass_sums + cells, tl.load(pass_sums + cells, mask=inside, other=0.0) + total, mask=inside)
+        tl.store(sums + cells, tl.zeros((BM, DK), tl.float32), mask=inside)
+    tl.store(usage + offs, tl.where(touched, mass, old), mask=live)
+    if LAST:
+        tl.store(pass_counts + offs, tl.load(pass_counts + offs, mask=live, other=0.0) + count, mask=live)
+    tl.store(counts + offs, tl.zeros((BM,), tl.float32), mask=live)
+
+
 def tile(width: int) -> int:
     return int(triton.next_power_of_2(max(width, MIN_TILE)))
 
@@ -291,7 +349,6 @@ def select(
     center_norms: torch.Tensor,
     top: torch.Tensor,
     counts: torch.Tensor,
-    row_norms: torch.Tensor,
     dims: int,
     probes: int,
 ) -> None:
@@ -304,7 +361,6 @@ def select(
         center_norms,
         top,
         counts,
-        row_norms,
         D=dims,
         DP=padded,
         DK=chunk(padded),
@@ -366,16 +422,9 @@ def member(
     )
 
 
-def reduce(
-    value: torch.Tensor,
-    ident: torch.Tensor,
-    row_norms: torch.Tensor,
-    distance: torch.Tensor,
-    labels: torch.Tensor,
-    probes: int,
-) -> None:
-    n = len(row_norms)
-    _reduce[(triton.cdiv(n, REDUCE_BLOCK),)](value, ident, row_norms, n, distance, labels, P=probes, BLOCK=REDUCE_BLOCK)
+def reduce(value: torch.Tensor, ident: torch.Tensor, labels: torch.Tensor, probes: int) -> None:
+    n = len(labels)
+    _reduce[(triton.cdiv(n, REDUCE_BLOCK),)](value, ident, n, labels, P=probes, BLOCK=REDUCE_BLOCK)
 
 
 def refresh(
@@ -472,4 +521,41 @@ def publish(
         DP=padded,
         DK=chunk(padded),
         BG=GROUP_BLOCK,
+    )
+
+
+def accumulate(rows: torch.Tensor, labels: torch.Tensor, sums: torch.Tensor, counts: torch.Tensor) -> None:
+    n, dims = len(rows), sums.shape[1]
+    padded = tile(dims)
+    _accumulate[(triton.cdiv(n, ACCUMULATE_ROWS),)](
+        rows, rows.stride(0), labels, n, sums, counts, D=dims, DP=padded, DK=chunk(padded), BM=ACCUMULATE_ROWS
+    )
+
+
+def ema(
+    centroids: torch.Tensor,
+    usage: torch.Tensor,
+    sums: torch.Tensor,
+    counts: torch.Tensor,
+    passes: tuple[torch.Tensor, torch.Tensor],
+    alpha: float,
+    last: bool,
+) -> None:
+    k, dims = centroids.shape
+    padded = tile(dims)
+    _ema[(triton.cdiv(k, EMA_ROWS),)](
+        centroids,
+        usage,
+        sums,
+        counts,
+        *passes,
+        k,
+        alpha,
+        1.0 - alpha,
+        D=dims,
+        DP=padded,
+        DK=chunk(padded),
+        BM=EMA_ROWS,
+        DECAYS=alpha != 1.0,
+        LAST=last,
     )

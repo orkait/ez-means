@@ -60,14 +60,14 @@ uv sync --extra gpu
 
 ```python
 import torch
-from ezmeans.gpu.backend import train
+from ezmeans.gpu.trainer import train
 from ezmeans.recipe import law_recipe
 
 x = torch.randn(1_000_000, 96, device="cuda").to(torch.bfloat16)
 centroids = train(x, 16384, law_recipe(len(x), 16384, 2, 0))
 ```
 
-`ezmeans.gpu` runs faiss' GPU e-means (`TorchEmeans`) with its assignment swapped for a grouped search in Triton kernels that never synchronize the host. `x` is a CUDA `bfloat16` tensor; distances accumulate in `float32`. It trains with the recipe's batch, step and revival threshold, the same as the CPU path, and rows that are not finite, or whose norm passes about 9.2e18 (half the square root of the `float32` maximum, where squared distances could overflow), raise `GpuInputError(NOT_FINITE)`.
+`ezmeans.gpu` runs the same e-means loop as the CPU path (EMA update, mass revival, cosine step, last-epoch mean). The grouped search, the batch sums and the EMA update are Triton kernels that never synchronize the host; the loop synchronizes once per revival check. `x` is a CUDA `bfloat16` tensor; distances accumulate in `float32`. Rows that are not finite, or whose norm passes about 9.2e18 (half the square root of the `float32` maximum, where squared distances could overflow), raise `GpuInputError(NOT_FINITE)`.
 
 ## 📦 Installation
 
@@ -75,7 +75,7 @@ centroids = train(x, 16384, law_recipe(len(x), 16384, 2, 0))
 |---|---|
 | Python 3.13 and numpy 2.1 or later | the only runtime dependency of the CPU path |
 | `gcc` with OpenMP | the kernel is compiled at first use (`KERNEL_COMPILE` in `src/ezmeans/config.py`) |
-| CUDA and the `gpu` extra (faiss-cpu 1.16+, torch 2.15+, triton 3.9+) | only for `ezmeans.gpu` |
+| CUDA and the `gpu` extra (torch 2.15+, triton 3.9+) | only for `ezmeans.gpu` |
 | Linux x86-64 | the only platform tested so far |
 
 | Variable | Default | Used for |
@@ -96,14 +96,13 @@ uv run mypy src tests
 
 | Limitation | Where |
 |---|---|
-| The GPU path assigns by Euclidean distance only; spherical training raises `GpuInputError` | `src/ezmeans/gpu/backend.py` |
-| The GPU path sets a private attribute of faiss' `TorchEmeans` (tested on faiss 1.16) to swap the assignment backend; if a faiss release stops using it, training raises `GpuInputError(UNSUPPORTED_FAISS)` | `src/ezmeans/gpu/backend.py` |
-| GPU results are not bit-identical run to run: the kernels accumulate with float atomics | `src/ezmeans/gpu/kernels.py` |
+| Both paths assign by Euclidean distance only | `src/ezmeans/kernel.c`, `src/ezmeans/gpu/kernels.py` |
+| GPU results are not bit-identical run to run: the kernels and the batch sums accumulate with float atomics | `src/ezmeans/gpu/kernels.py`, `src/ezmeans/gpu/trainer.py` |
 | Tested only on Linux x86-64 with gcc; ARM, macOS and Windows are untested | none yet |
 
 ## 🙏 Credits
 
-ez-means builds on [e-means](https://arxiv.org/abs/2611.09501) (Bessa et al., Meta FAIR) and on [faiss](https://github.com/facebookresearch/faiss) (MIT). `src/ezmeans/recipe.py` carries the e-means batch and step laws from `faiss.contrib.e_means` 1.16 (notice in [`NOTICE`](NOTICE)), and the GPU path runs faiss' GPU e-means training loop.
+ez-means builds on [e-means](https://arxiv.org/abs/2611.09501) (Bessa et al., Meta FAIR) and on [faiss](https://github.com/facebookresearch/faiss) (MIT). `src/ezmeans/recipe.py` carries the e-means batch and step laws from `faiss.contrib.e_means` 1.16 (notice in [`NOTICE`](NOTICE)).
 
 ## 📄 License
 

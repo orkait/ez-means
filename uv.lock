@@ -164,7 +164,6 @@ dependencies = [
 
 [package.optional-dependencies]
 gpu = [
-    { name = "faiss-cpu" },
     { name = "torch" },
     { name = "triton" },
 ]
@@ -179,7 +178,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "faiss-cpu", marker = "extra == 'gpu'", specifier = ">=1.16" },
     { name = "numpy", specifier = ">=2.1" },
     { name = "torch", marker = "extra == 'gpu'", specifier = ">=2.15" },
     { name = "triton", marker = "extra == 'gpu'", specifier = ">=3.9" },

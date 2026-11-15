@@ -17,9 +17,8 @@ class Fault(Enum):
     BAD_PROBES = "probes must be between 1 and the number of groups"
     TOO_MANY_GROUPS = "k needs more groups than the kernels support"
     NOT_GROUPED = "regroup must run before refresh or assign"
-    SPHERICAL = "only Euclidean assignment is supported"
     NOT_FINITE = "every row must be finite, with a norm small enough for float32 squared distances"
-    UNSUPPORTED_FAISS = "this faiss version bypassed the grouped assignment backend"
+    BAD_SIZE = "k must be between 1 and the number of rows, and the epochs must cover at least one row"
 
 
 class GpuInputError(ValueError):
@@ -91,15 +90,14 @@ class GroupIndex:
         with torch.cuda.device(self.device):
             kernels.refresh(centroids, self.order, self.members, self.member_norms, self.dims)
 
-    def assign(self, rows: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def assign(self, rows: torch.Tensor) -> torch.Tensor:
         self.check(rows, torch.bfloat16, None)
         self.require_groups()
         n, span = len(rows), len(self.sizes)
         pairs = n * self.probes
-        distance = torch.empty(n, dtype=torch.float32, device=self.device)
         labels = torch.empty(n, dtype=torch.int64, device=self.device)
         if n == 0:
-            return distance, labels
+            return labels
         counts = torch.zeros(span, dtype=torch.int32, device=self.device)
         fill = torch.zeros(span, dtype=torch.int32, device=self.device)
         ends = torch.empty(span, dtype=torch.int32, device=self.device)
@@ -108,9 +106,8 @@ class GroupIndex:
         items = torch.empty(pairs, dtype=torch.int32, device=self.device)
         value = torch.empty(pairs, dtype=torch.float32, device=self.device)
         ident = torch.empty(pairs, dtype=torch.int32, device=self.device)
-        row_norms = torch.empty(n, dtype=torch.float32, device=self.device)
         with torch.cuda.device(self.device):
-            kernels.select(rows, self.rounded, self.rounded_norms, top, counts, row_norms, self.dims, self.probes)
+            kernels.select(rows, self.rounded, self.rounded_norms, top, counts, self.dims, self.probes)
             kernels.plan(counts, ends, blocks, self.groups, PAIR_ROWS)
             kernels.bucket(top, ends, counts, fill, items)
             kernels.member(
@@ -130,8 +127,8 @@ class GroupIndex:
                 self.groups,
                 self.probes,
             )
-            kernels.reduce(value, ident, row_norms, distance, labels, self.probes)
-        return distance, labels
+            kernels.reduce(value, ident, labels, self.probes)
+        return labels
 
     def check(self, tensor: torch.Tensor, dtype: torch.dtype, rows: int | None) -> None:
         if not tensor.is_cuda:

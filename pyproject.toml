@@ -10,7 +10,7 @@ requires-python = ">=3.13"
 dependencies = ["numpy>=2.1"]
 
 [project.optional-dependencies]
-gpu = ["faiss-cpu>=1.16", "torch>=2.15", "triton>=3.9"]
+gpu = ["torch>=2.15", "triton>=3.9"]
 
 [dependency-groups]
 dev = ["ruff", "mypy", "pytest", "faiss-cpu>=1.16"]
@@ -31,15 +31,9 @@ known-first-party = ["ezmeans"]
 [tool.mypy]
 strict = true
 ignore_missing_imports = true
-untyped_calls_exclude = ["faiss"]
 
 [[tool.mypy.overrides]]
 module = ["ezmeans.gpu.kernels"]
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
 disallow_untyped_decorators = false
-
-[[tool.mypy.overrides]]
-module = ["ezmeans.gpu.backend"]
-disallow_subclassing_any = false
-disallow_untyped_calls = false
