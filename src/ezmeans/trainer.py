@@ -20,6 +20,7 @@ def ez_means(
     sampling: float | None = None,
     init: Matrix | None = None,
     init_usage: float = INIT_USAGE,
+    screen: float | None = None,
 ) -> tuple[Matrix, float]:
     settings = kernel.Settings(
         batch=recipe.batch,
@@ -33,6 +34,7 @@ def ez_means(
         init_usage=init_usage,
         split_epsilon=SPLIT_EPSILON,
         ad_epsilon=sampling or 0.0,
+        screen_epsilon=screen or 0.0,
     )
     centroids, work = kernel.train(x, k, epoch_rows(len(x), recipe.epochs), settings, init)
     return centroids, work / x.shape[1]

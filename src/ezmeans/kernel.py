@@ -65,6 +65,7 @@ class Settings(ctypes.Structure):
         ("init_usage", ctypes.c_double),
         ("split_epsilon", ctypes.c_double),
         ("ad_epsilon", ctypes.c_double),
+        ("screen_epsilon", ctypes.c_double),
     ]
 
 

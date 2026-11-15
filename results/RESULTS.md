@@ -340,6 +340,37 @@ Each lever was then tested on its own:
 
 The race budgets T=1, 2, 3, 4 also overstate ez-means' time to target: plain T=2 lands at 1.0011, so a fractional T of about 2.2 (about 1.15 s) would cross. The paper protocol, with 0.2-epoch steps, does not have this problem.
 
+## 14. Screening bounds from other fields (`screening.py`, `screened_time.py`)
+
+These are fixed trained centroids, k=4096, grouped p4 candidates, 2000 points, and an oracle best distance. "Float dims" counts the float work per candidate that is still scanned.
+
+| Screen | Field | SIFT: screened out, nearest kept, float dims | DEEP: screened out, nearest kept, float dims |
+|---|---|---|---|
+| exact early abandon (today) | | 0, 1.0000, 65.2 | 0, 1.0000, 50.2 |
+| PAA block-mean lower bound, block 4 | time-series search | 0.159, 1.0000, 90.5 (1.39x more) | 0.135, 1.0000, 70.4 (1.40x more) |
+| RaBitQ 1-bit code, high-probability bound, eps 3.0 | vector databases | 0.964, 1.0000, 3.8 (17x less) | 0.965, 1.0000, 3.0 (17x less) |
+| RaBitQ, eps 1.9 | | 0.982, 0.9855, 2.1 | 0.982, 0.9875, 1.6 |
+
+A 4-bit or 8-bit query gives the same numbers as a float query. The RaBitQ bound is probabilistic, not deterministic.
+
+In the C kernel (`ez_means(..., screen=eps)`, off by default) the screening does not yet pay. On SIFT1M, k=4096, T=2:
+
+| Version | Seconds | Against exact (1.02 s) |
+|---|---|---|
+| v1: bit planes built with a branch per bit | 4.91 | 4.8x slower |
+| v2: bit planes built in registers, branch-free | 2.00 | 2.0x slower |
+
+Quality holds: test MSE is within 0.04% of exact at k 4096 and 16384. perf shows the per-candidate estimate (scalar popcounts over 4 planes and 2 words, a divide, branches) costs more than the 16-lane float scan it replaces.
+
+| Build | Cost per candidate estimate (microbenchmark, 4-bit query) |
+|---|---|
+| clang, native (vectorized popcount) | 0.26 ns |
+| gcc, native (scalar `popcnt`) | 1.24 ns |
+| gcc, x86-64 baseline (no `popcnt`) | 4.92 ns |
+| reference: the float scan today | about 2.4 ns |
+
+Making it pay needs group-ordered codes and lane-parallel estimates, and the vector popcount that only AVX-512 VPOPCNTDQ and ARM NEON provide. It stays experimental.
+
 ## Next
 
 | # | Step | Why |
