@@ -54,15 +54,16 @@ def fit(x: Matrix, init: Matrix | None = None, epochs: float = EPOCHS) -> tuple[
     return ez_means(x, CLUSTERS, law_recipe(ROWS, CLUSTERS, epochs, SEED), PROBES, init=init)
 
 
-def search(x: Matrix, homes: Labels) -> tuple[Matrix, Labels, int]:
+def search(x: Matrix, homes: Labels, probes: int = GROUPS) -> tuple[Matrix, Labels, int]:
     centroids = np.ascontiguousarray(x[:CLUSTERS])
-    return kernel.assign(x, centroids[:GROUPS], centroids, homes, GROUPS)
+    return kernel.assign(x, centroids[:GROUPS], centroids, homes, probes)
 
 
+@pytest.mark.parametrize("occupied", [GROUPS, GROUPS - 1])
 @pytest.mark.parametrize("dims", [16, 64, 128])
-def test_probing_every_group_is_brute_force(dims: int) -> None:
+def test_probing_every_occupied_group_is_brute_force(dims: int, occupied: int) -> None:
     x = points(dims)
-    _, labels, _ = search(x, round_robin())
+    _, labels, _ = search(x, round_robin() % occupied, occupied)
     _, truth = faiss.knn(x, x[:CLUSTERS], 1)
     assert np.array_equal(labels, truth[:, 0])
 

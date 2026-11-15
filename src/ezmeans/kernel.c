@@ -157,7 +157,8 @@ static void insert(float *near, int64_t *which, int64_t probes, float value, int
     which[at] = id;
 }
 
-static void probe(const float *row, const Tiles *groups, int64_t dims, int64_t probes, float *near, int64_t *which, int64_t *work)
+static void probe(const float *row, const Tiles *groups, const Tiles *cells, int64_t dims, int64_t probes, float *near, int64_t *which,
+                  int64_t *work)
 {
     for (int64_t p = 0; p < probes; p++) {
         near[p] = INFINITY;
@@ -168,9 +169,11 @@ static void probe(const float *row, const Tiles *groups, int64_t dims, int64_t p
         const float bound = near[probes - 1];
         if (!scan(row, groups->values + t * dims * LANES, dims, bound, total, work))
             continue;
-        for (int lane = 0; lane < LANES; lane++)
-            if (total[lane] < bound)
-                insert(near, which, probes, total[lane], groups->ids[t * LANES + lane]);
+        for (int lane = 0; lane < LANES; lane++) {
+            const int64_t id = groups->ids[t * LANES + lane];
+            if (total[lane] < bound && id >= 0 && cells->first[id + 1] > cells->first[id])
+                insert(near, which, probes, total[lane], id);
+        }
     }
 }
 
@@ -203,7 +206,7 @@ static int64_t label_rows(const float *x, const int64_t *index, int64_t count, i
         int64_t which[MAX_PROBES];
         const float *row = x + index[r] * dims;
         int64_t scanned = 0;
-        probe(row, groups, dims, probes, near, which, &scanned);
+        probe(row, groups, cells, dims, probes, near, which, &scanned);
         nearest(row, cells, dims, which, probes, best + r, labels + r, &scanned);
         total += scanned;
     }
