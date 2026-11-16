@@ -1,6 +1,8 @@
 import dataclasses
 import hashlib
 import os
+import platform
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable
@@ -10,7 +12,7 @@ import numpy as np
 import pytest
 
 from ezmeans import law_recipe
-from ezmeans.config import KERNEL_COMPILE
+from ezmeans.config import CACHE_VARIABLE, COMPILER_VARIABLE, KERNEL_COMPILE, TARGET_VARIABLE
 from ezmeans.cpu import KernelError, KernelStatus, Layout, Regroup, cpu_layout, native, paper_layout, train
 from ezmeans.cpu.build import KERNEL_SOURCE
 from ezmeans.cpu.native import Labels, Matrix
@@ -55,6 +57,25 @@ STRICT_WARNINGS = (
     "-c",
 )
 OBJECT_SUFFIX = ".o"
+COMPILERS = ("gcc", "clang")
+X86 = "x86_64"
+X86_TARGETS = ("native", "x86-64", "x86-64-v3")
+OTHER_TARGETS = ("native",)
+OPENMP_PROBE = "int main(void) { return 0; }"
+
+
+def links_openmp(compiler: str, folder: Path) -> bool:
+    if shutil.which(compiler) is None:
+        return False
+    command = [compiler, "-fopenmp", "-x", "c", "-", "-o", str(folder / compiler)]
+    return subprocess.run(command, input=OPENMP_PROBE, capture_output=True, text=True, check=False).returncode == 0
+
+
+def trained_digest(environment: dict[str, str]) -> str:
+    result = subprocess.run(
+        [sys.executable, "-c", TRAIN_SCRIPT], env=os.environ | environment, capture_output=True, text=True, check=True
+    )
+    return result.stdout
 
 
 def points(dims: int) -> Matrix:
@@ -207,15 +228,20 @@ def test_accumulate_matches_numpy_add_at() -> None:
 
 
 def test_centroids_do_not_depend_on_thread_count() -> None:
-    digests = set()
-    for threads in THREAD_COUNTS:
-        environment = os.environ | {"OMP_NUM_THREADS": threads}
-        result = subprocess.run(
-            [sys.executable, "-c", TRAIN_SCRIPT], env=environment, capture_output=True, text=True, check=True
-        )
-        digests.add(result.stdout)
+    digests = {trained_digest({"OMP_NUM_THREADS": threads}) for threads in THREAD_COUNTS}
     assert len(digests) == 1
     assert hashlib.sha256(b"").hexdigest() not in digests
+
+
+def test_centroids_do_not_depend_on_compiler_or_target(tmp_path: Path) -> None:
+    targets = X86_TARGETS if platform.machine() == X86 else OTHER_TARGETS
+    builds = [(c, t) for c in COMPILERS if links_openmp(c, tmp_path) for t in targets]
+    digests = {
+        trained_digest({COMPILER_VARIABLE: c, TARGET_VARIABLE: t, CACHE_VARIABLE: str(tmp_path / f"{c}-{t}")})
+        for c, t in builds
+    }
+    assert builds
+    assert len(digests) == 1
 
 
 def test_cpu_training_runs_without_faiss() -> None:

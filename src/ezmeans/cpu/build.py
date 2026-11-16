@@ -10,7 +10,7 @@ KERNEL_SOURCE = Path(__file__).with_name("kernel.c")
 LIBRARY_STEM = "libkernel"
 LIBRARY_SUFFIX = ".so"
 KEY_LENGTH = 16
-TARGET_QUERY = ("-Q", "--help=target")
+TARGET_QUERY = ("-dM", "-E", "-x", "c", os.devnull)
 
 
 def build_key() -> str:

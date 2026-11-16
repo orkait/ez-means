@@ -18,7 +18,7 @@ ez-means is a Python package for training k-means centroids on large vector sets
 |---|---|
 | Grouped probing | the centroids are regrouped into groups, and each point searches only its `probes` nearest groups |
 | Exact early abandon | a centroid is dropped as soon as its running squared distance passes the best so far, so the probed groups are searched exactly |
-| Deterministic CPU loop | training runs in C11 with OpenMP, and the centroids are bit-identical at any thread count |
+| Deterministic CPU loop | training runs in C11 with OpenMP, and the centroids are bit-identical at any thread count, compiler and `-march` target tested |
 
 It is for anyone who trains many centroids on millions of vectors, for example IVF index training or codebooks.
 
@@ -81,13 +81,15 @@ centroids = train(x, 16384, law_recipe(len(x), 16384, 2, 0))
 | Requirement | Why |
 |---|---|
 | Python 3.13 and numpy 2.1 or later | the only runtime dependency of the CPU path |
-| `gcc` with OpenMP | the kernel is compiled at first use (`KERNEL_COMPILE` in `src/ezmeans/config.py`) |
+| `gcc`, or `clang` with libomp, with OpenMP | the kernel is compiled at first use (`KERNEL_COMPILE` in `src/ezmeans/config.py`) |
 | CUDA and the `gpu` extra (torch 2.15+, triton 3.9+) | only for `ezmeans.gpu` |
 | Linux x86-64 | the only platform tested so far |
 
 | Variable | Default | Used for |
 |---|---|---|
 | `EZMEANS_CACHE` | `~/.cache/ezmeans` | the compiled kernel |
+| `EZMEANS_CC` | `gcc` | the C compiler that builds the kernel |
+| `EZMEANS_MARCH` | `native` | the `-march` target, for example `x86-64-v3` to build one kernel for a mixed cluster |
 
 ## Development
 
@@ -114,7 +116,7 @@ uv run mypy src tests
 | Both paths assign by Euclidean distance only | `src/ezmeans/cpu/kernel.c`, `src/ezmeans/gpu/kernels.py` |
 | GPU results are not bit-identical run to run: the kernels and the batch sums accumulate with float atomics | `src/ezmeans/gpu/kernels.py`, `src/ezmeans/gpu/trainer.py` |
 | The GPU path holds at most 512 groups, so `k` up to 262,656; a larger `k` raises `GpuInputError(TOO_MANY_GROUPS)` | `MAX_GROUP_SPAN` in `src/ezmeans/gpu/constants.py` |
-| Tested only on Linux x86-64 with gcc; ARM, macOS and Windows are untested | none yet |
+| Same bits tested only on Linux x86-64: gcc 14 and 15, clang 19, and `x86-64`, `x86-64-v3` and AVX-512 `native` builds; ARM, macOS and Windows are untested | `test_centroids_do_not_depend_on_compiler_or_target` in `tests/test_cpu.py` |
 | The CPU layout was measured only at k = 4096, 16384 and 65536; the GPU path keeps √k groups and its own probes | `src/ezmeans/cpu/layout.py` |
 
 ## Credits
