@@ -76,6 +76,8 @@ class Settings(ctypes.Structure):
         ("tau", ctypes.c_double),
         ("init_usage", ctypes.c_double),
         ("split_epsilon", ctypes.c_double),
+        ("groups", ctypes.c_int64),
+        ("warm_groups", ctypes.c_int64),
     ]
 
 

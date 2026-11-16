@@ -90,7 +90,8 @@ def test_gpu_training_from_a_shared_start_matches_cpu_quality() -> None:
     recipe = law_recipe(ROWS, CLUSTERS, EPOCHS, SEED)
     data = rows.float().cpu().numpy()
     gpu = squared_error(data, train(rows, CLUSTERS, recipe, PROBES, init=start).cpu().numpy())
-    reference = squared_error(data, cpu.train(data, CLUSTERS, recipe, PROBES, init=start.cpu().numpy()))
+    layout = cpu.Layout(group_count(CLUSTERS), PROBES, cpu.Regroup.COLD)
+    reference = squared_error(data, cpu.train(data, CLUSTERS, recipe, layout, init=start.cpu().numpy()))
     assert gpu <= reference * (1 + QUALITY_TOLERANCE)
 
 

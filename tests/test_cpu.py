@@ -11,7 +11,7 @@ import pytest
 
 from ezmeans import law_recipe
 from ezmeans.config import KERNEL_COMPILE
-from ezmeans.cpu import KernelError, KernelStatus, native, train
+from ezmeans.cpu import KernelError, KernelStatus, Layout, Regroup, cpu_layout, native, train
 from ezmeans.cpu.build import KERNEL_SOURCE
 from ezmeans.cpu.native import Labels, Matrix
 from ezmeans.recipe import group_count
@@ -24,6 +24,9 @@ EPOCHS = 2
 PROBES = 4
 SEED = 0
 GROUPS = group_count(CLUSTERS)
+FIT_LAYOUT = Layout(GROUPS, PROBES, Regroup.COLD)
+EXACT_LAYOUT = Layout(GROUPS, GROUPS, Regroup.COLD)
+LAYOUT_SWEEP = 70_000
 MANY_GROUPS = 80
 HUGE_BATCH = 2**62
 POISONED_ROW = 7
@@ -34,9 +37,10 @@ TRAIN_SCRIPT = f"""
 import hashlib, sys
 import numpy as np
 from ezmeans import law_recipe
-from ezmeans.cpu import train
+from ezmeans.cpu import Layout, Regroup, train
 x = np.random.default_rng({SEED}).standard_normal(({ROWS}, {DIMS})).astype(np.float32)
-centroids = train(x, {CLUSTERS}, law_recipe(len(x), {CLUSTERS}, {EPOCHS}, {SEED}), {PROBES})
+layout = Layout({GROUPS}, {PROBES}, Regroup.COLD)
+centroids = train(x, {CLUSTERS}, law_recipe(len(x), {CLUSTERS}, {EPOCHS}, {SEED}), layout)
 sys.stdout.write(hashlib.sha256(centroids.tobytes()).hexdigest())
 """
 BLOCK_FAISS = 'import sys\nsys.modules["faiss"] = None\n'
@@ -67,8 +71,8 @@ def round_robin() -> Labels:
     return np.arange(CLUSTERS, dtype=np.int64) % GROUPS
 
 
-def fit(x: Matrix, init: Matrix | None = None, epochs: float = EPOCHS) -> Matrix:
-    return train(x, CLUSTERS, law_recipe(ROWS, CLUSTERS, epochs, SEED), PROBES, init=init)
+def fit(x: Matrix, init: Matrix | None = None, epochs: float = EPOCHS, layout: Layout = FIT_LAYOUT) -> Matrix:
+    return train(x, CLUSTERS, law_recipe(ROWS, CLUSTERS, epochs, SEED), layout, init=init)
 
 
 def search(x: Matrix, homes: Labels, probes: int = GROUPS, groups: int = GROUPS) -> Labels:
@@ -96,6 +100,9 @@ def test_probing_every_occupied_group_is_brute_force(dims: int, groups: int, occ
         (lambda: fit(points(DIMS), init=points(DIMS)[: CLUSTERS - 1]), KernelStatus.BAD_SIZE),
         (lambda: fit(points(DIMS), init=points(DIMS // 2)[:CLUSTERS]), KernelStatus.BAD_SIZE),
         (lambda: fit(points(DIMS), epochs=TINY_EPOCHS), KernelStatus.BAD_SIZE),
+        (lambda: fit(points(DIMS), layout=Layout(CLUSTERS + 1, PROBES, Regroup.COLD)), KernelStatus.BAD_SIZE),
+        (lambda: fit(points(DIMS), layout=Layout(0, PROBES, Regroup.COLD)), KernelStatus.BAD_SIZE),
+        (lambda: fit(points(DIMS), layout=Layout(GROUPS, GROUPS + 1, Regroup.WARM)), KernelStatus.BAD_PROBES),
         (lambda: search(poisoned(np.nan), round_robin()), KernelStatus.NOT_FINITE),
         (lambda: search(points(DIMS), round_robin() + GROUPS), KernelStatus.BAD_LABEL),
         (lambda: search(points(DIMS), round_robin()[1:]), KernelStatus.BAD_SIZE),
@@ -109,6 +116,9 @@ def test_probing_every_occupied_group_is_brute_force(dims: int, groups: int, occ
         "short init",
         "narrow init",
         "empty plan",
+        "more groups than centroids",
+        "no groups",
+        "more probes than groups",
         "nan search",
         "home out of range",
         "short homes",
@@ -121,6 +131,39 @@ def test_bad_input_raises_kernel_error(call: Callable[[], object], status: Kerne
     assert raised.value.status is status
 
 
+@pytest.mark.parametrize(
+    ("k", "dims", "layout"),
+    [
+        (1, 8, Layout(1, 1, Regroup.COLD)),
+        (16, 8, Layout(4, 4, Regroup.COLD)),
+        (4096, 96, Layout(64, 6, Regroup.COLD)),
+        (16384, 96, Layout(128, 8, Regroup.COLD)),
+        (65536, 32, Layout(256, 16, Regroup.COLD)),
+        (65536, 96, Layout(512, 15, Regroup.WARM)),
+        (262144, 128, Layout(1024, 20, Regroup.WARM)),
+    ],
+)
+def test_cpu_layout_follows_the_measured_rule(k: int, dims: int, layout: Layout) -> None:
+    assert cpu_layout(k, dims) == layout
+
+
+@pytest.mark.parametrize("dims", [2, 96])
+def test_cpu_layout_probes_fit_inside_the_groups(dims: int) -> None:
+    for k in range(1, LAYOUT_SWEEP):
+        layout = cpu_layout(k, dims)
+        assert 1 <= layout.probes <= layout.groups <= k
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [Layout(GROUPS // 2, GROUPS // 2, Regroup.COLD), Layout(GROUPS, GROUPS, Regroup.WARM)],
+    ids=["half", "warm"],
+)
+def test_probing_every_group_gives_the_same_centroids_for_any_layout(layout: Layout) -> None:
+    x = points(DIMS)
+    assert np.array_equal(fit(x, layout=layout), fit(x, layout=EXACT_LAYOUT))
+
+
 @pytest.mark.parametrize("dims", [20, 100])
 def test_zero_padding_does_not_change_centroids(dims: int) -> None:
     x = points(dims)
@@ -128,16 +171,16 @@ def test_zero_padding_does_not_change_centroids(dims: int) -> None:
     padded = np.zeros((ROWS, width), dtype=np.float32)
     padded[:, :dims] = x
     recipe = law_recipe(ROWS, CLUSTERS, EPOCHS, SEED)
-    centroids = train(x, CLUSTERS, recipe, PROBES)
-    reference = train(padded, CLUSTERS, recipe, PROBES)
+    centroids = train(x, CLUSTERS, recipe, FIT_LAYOUT)
+    reference = train(padded, CLUSTERS, recipe, FIT_LAYOUT)
     assert np.array_equal(centroids, reference[:, :dims])
 
 
 def test_a_batch_past_the_rows_is_one_batch_per_epoch() -> None:
     x = points(DIMS)
     recipe = law_recipe(ROWS, CLUSTERS, EPOCHS, SEED)
-    whole = train(x, CLUSTERS, dataclasses.replace(recipe, batch=ROWS), PROBES)
-    assert np.array_equal(whole, train(x, CLUSTERS, dataclasses.replace(recipe, batch=HUGE_BATCH), PROBES))
+    whole = train(x, CLUSTERS, dataclasses.replace(recipe, batch=ROWS), FIT_LAYOUT)
+    assert np.array_equal(whole, train(x, CLUSTERS, dataclasses.replace(recipe, batch=HUGE_BATCH), FIT_LAYOUT))
 
 
 def test_accumulate_matches_numpy_add_at() -> None:

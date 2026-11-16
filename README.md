@@ -16,7 +16,7 @@ ez-means is a Python package for training k-means centroids on large vector sets
 
 | Change | What it does |
 |---|---|
-| Grouped probing | the centroids are regrouped into √k groups, and each point searches only its `probes` nearest groups |
+| Grouped probing | the centroids are regrouped into groups, and each point searches only its `probes` nearest groups |
 | Exact early abandon | a centroid is dropped as soon as its running squared distance passes the best so far, so the probed groups are searched exactly |
 | Deterministic CPU loop | training runs in C11 with OpenMP, and the centroids are bit-identical at any thread count |
 
@@ -40,16 +40,22 @@ centroids = train(x, 1024, law_recipe(len(x), 1024, 2, 0))
 | Call | Returns |
 |---|---|
 | `ezmeans.law_recipe(n, k, epochs, seed, law=BatchLaw.THROUGHPUT)` | the batch size and step size from the e-means scaling law; `BatchLaw.QUALITY` is the batch eight times smaller that the e-means paper uses above 2M rows |
-| `ezmeans.cpu.train(x, k, recipe, probes=None, init=None)` | the `k × d` centroids; `init` is an optional `k × d` start |
-| `ezmeans.default_probes(k)` | the probes used when `probes` is `None`: 1/16 of the √k groups, at least 4 (4 at k=4096, 8 at 16384, 16 at 65536) |
+| `ezmeans.cpu.train(x, k, recipe, layout=None, init=None)` | the `k × d` centroids; `init` is an optional `k × d` start |
+| `ezmeans.cpu.cpu_layout(k, d)` | the `Layout(groups, probes, regroup)` used when `layout` is `None` (below) |
+| `ezmeans.default_probes(k)` | the probes the GPU path uses when `probes` is `None`: 1/16 of the √k groups, at least 4 |
 
 The first call compiles `src/ezmeans/cpu/kernel.c` with `gcc` into `~/.cache/ezmeans/`. Fewer probes is faster and can miss a point's nearest centroid; probing every group is exact.
+
+| CPU layout | Groups | Probes | Regroup | k=4096 · 16384 · 65536, d ≥ 64 |
+|---|---|---|---|---|
+| `k < 65536` or `d < 64` | round(√k) | 1/16 of the groups, at least 6, at most the groups | `Regroup.COLD`: 10 Lloyd iterations from random centroids | 64/6 · 128/8 · - |
+| `k ≥ 65536` and `d ≥ 64` | the largest power of two up to 2√k | ⌈0.625 √groups⌉ | `Regroup.WARM`: 2 Lloyd iterations from the previous groups | - · - · 512/15 |
 
 | Error | Raised when |
 |---|---|
 | `KernelError(NOT_FINITE)` | a row or centroid has no finite squared distance: a NaN, an infinity, or values large enough to overflow `float32` |
-| `KernelError(BAD_SIZE)` | `k` is below 1 or above the rows, `init` is not `k × d`, or the epochs cover no rows |
-| `KernelError(BAD_PROBES)` | `probes` is below 1 or above the √k groups |
+| `KernelError(BAD_SIZE)` | `k` is below 1 or above the rows, the layout's groups are below 1 or above `k`, `init` is not `k × d`, or the epochs cover no rows |
+| `KernelError(BAD_PROBES)` | the layout's probes are below 1 or above its groups |
 | `RecipeError` (a `ValueError`) | a `Recipe` with `epochs <= 0` (`EPOCHS`), `batch < 1` (`BATCH`) or `alpha0` outside (0, 1] (`STEP`), or `law_recipe` with `n < 1`, `k < 1` or `epochs <= 0` (`LAW_DOMAIN`) |
 
 ## ⚡ GPU
@@ -94,7 +100,7 @@ uv run mypy src tests
 |---|---|
 | `src/ezmeans/recipe.py` | the recipe both backends train with: scaling laws, epoch plan, default probes, `RecipeError` |
 | `src/ezmeans/config.py` | the one config: cache directory and gcc flags |
-| `src/ezmeans/cpu/` | `kernel.c` (C11 + OpenMP), `build.py` (hash-keyed gcc build), `native.py` (ctypes binding and input checks), `trainer.py` |
+| `src/ezmeans/cpu/` | `kernel.c` (C11 + OpenMP), `build.py` (hash-keyed gcc build), `native.py` (ctypes binding and input checks), `layout.py` (groups, probes and regroup per k and d), `trainer.py` |
 | `src/ezmeans/gpu/` | `kernels.py` (Triton), `index.py` (`GroupIndex`), `trainer.py` (the e-means loop), `constants.py` |
 | `tests/` | `test_recipe.py`, `test_cpu.py`, `test_gpu.py` |
 
@@ -107,6 +113,7 @@ uv run mypy src tests
 | Both paths assign by Euclidean distance only | `src/ezmeans/cpu/kernel.c`, `src/ezmeans/gpu/kernels.py` |
 | GPU results are not bit-identical run to run: the kernels and the batch sums accumulate with float atomics | `src/ezmeans/gpu/kernels.py`, `src/ezmeans/gpu/trainer.py` |
 | Tested only on Linux x86-64 with gcc; ARM, macOS and Windows are untested | none yet |
+| The CPU layout was measured only at k = 4096, 16384 and 65536; the GPU path keeps √k groups and its own probes | `src/ezmeans/cpu/layout.py` |
 
 ## 🙏 Credits
 

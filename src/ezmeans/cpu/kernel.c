@@ -24,6 +24,8 @@ typedef struct {
     double tau;
     double init_usage;
     double split_epsilon;
+    int64_t groups;
+    int64_t warm_groups;
 } Settings;
 
 typedef struct {
@@ -287,7 +289,7 @@ int accumulate(const float *rows, int64_t count, int64_t dims, const int64_t *la
 }
 
 static int regroup(const float *centroids, int64_t k, int64_t dims, const Settings *settings, float *groups, int64_t group_count,
-                   int64_t *homes, int64_t *order, int64_t *offsets)
+                   int warm, int64_t *homes, int64_t *order, int64_t *offsets)
 {
     int64_t *pool = identity(k);
     double *sums = malloc((size_t)(group_count * dims) * sizeof *sums);
@@ -295,7 +297,7 @@ static int regroup(const float *centroids, int64_t k, int64_t dims, const Settin
     Tiles tiles = {0};
     int status = pool && sums && sizes ? DONE : NO_MEMORY;
     uint64_t state = settings->seed;
-    for (int64_t g = 0; status == DONE && g < group_count; g++) {
+    for (int64_t g = 0; status == DONE && !warm && g < group_count; g++) {
         const int64_t pick = g + bounded(&state, k - g);
         const int64_t held = pool[g];
         pool[g] = pool[pick];
@@ -439,8 +441,9 @@ int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *pla
     for (int64_t e = 0; e < epochs; e++)
         if (plan[e] < 1 || plan[e] > n)
             return BAD_SIZE;
-    const int64_t rounded = llround(sqrt((double)k));
-    const int64_t group_count = rounded > 1 ? rounded : 1;
+    const int64_t group_count = settings->groups;
+    if (group_count < 1 || group_count > k)
+        return BAD_SIZE;
     if (settings->probes < 1 || settings->probes > group_count)
         return BAD_PROBES;
     const int64_t width = (dims + CHUNK - 1) / CHUNK * CHUNK;
@@ -497,7 +500,8 @@ int train(const float *x, int64_t n, int64_t dims, int64_t k, const int64_t *pla
             }
             if (searches % settings->check_every == 0) {
                 release(&group_tiles);
-                status = regroup(centroids, k, width, settings, groups, group_count, homes, cell_order, offsets);
+                status = regroup(centroids, k, width, settings, groups, group_count, settings->warm_groups && searches > 0, homes,
+                                 cell_order, offsets);
                 if (status == DONE)
                     status = tile_all(groups, group_count, width, &group_tiles);
             }

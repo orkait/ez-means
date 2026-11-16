@@ -1,28 +1,23 @@
 from ezmeans.cpu import native
+from ezmeans.cpu.layout import Layout, Regroup, cpu_layout
 from ezmeans.cpu.native import Matrix
-from ezmeans.recipe import (
-    ALPHA_MIN_FACTOR,
-    CHECK_EVERY,
-    GROUP_ITERATIONS,
-    INIT_USAGE,
-    SPLIT_EPSILON,
-    Recipe,
-    default_probes,
-    epoch_rows,
-)
+from ezmeans.recipe import ALPHA_MIN_FACTOR, CHECK_EVERY, INIT_USAGE, SPLIT_EPSILON, Recipe, epoch_rows
 
 
-def train(x: Matrix, k: int, recipe: Recipe, probes: int | None = None, init: Matrix | None = None) -> Matrix:
+def train(x: Matrix, k: int, recipe: Recipe, layout: Layout | None = None, init: Matrix | None = None) -> Matrix:
+    chosen = cpu_layout(k, x.shape[1]) if layout is None else layout
     settings = native.Settings(
         batch=recipe.batch,
-        probes=default_probes(k) if probes is None else probes,
+        probes=chosen.probes,
         check_every=CHECK_EVERY,
-        group_iterations=GROUP_ITERATIONS,
+        group_iterations=chosen.regroup.value,
         seed=recipe.seed,
         alpha0=recipe.alpha0,
         alpha_min_factor=ALPHA_MIN_FACTOR,
         tau=recipe.tau,
         init_usage=INIT_USAGE,
         split_epsilon=SPLIT_EPSILON,
+        groups=chosen.groups,
+        warm_groups=chosen.regroup is Regroup.WARM,
     )
     return native.train(x, k, epoch_rows(len(x), recipe.epochs), settings, init)
