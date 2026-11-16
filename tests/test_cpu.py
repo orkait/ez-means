@@ -11,7 +11,7 @@ import pytest
 
 from ezmeans import law_recipe
 from ezmeans.config import KERNEL_COMPILE
-from ezmeans.cpu import KernelError, KernelStatus, Layout, Regroup, cpu_layout, native, train
+from ezmeans.cpu import KernelError, KernelStatus, Layout, Regroup, cpu_layout, native, paper_layout, train
 from ezmeans.cpu.build import KERNEL_SOURCE
 from ezmeans.cpu.native import Labels, Matrix
 from ezmeans.recipe import group_count
@@ -145,6 +145,19 @@ def test_bad_input_raises_kernel_error(call: Callable[[], object], status: Kerne
 )
 def test_cpu_layout_follows_the_measured_rule(k: int, dims: int, layout: Layout) -> None:
     assert cpu_layout(k, dims) == layout
+
+
+@pytest.mark.parametrize(
+    ("k", "layout"),
+    [
+        (16, Layout(4, 4, Regroup.COLD)),
+        (4096, Layout(64, 4, Regroup.COLD)),
+        (16384, Layout(128, 8, Regroup.COLD)),
+        (65536, Layout(256, 16, Regroup.COLD)),
+    ],
+)
+def test_paper_layout_is_root_k_groups_with_a_sixteenth_probed(k: int, layout: Layout) -> None:
+    assert paper_layout(k) == layout
 
 
 @pytest.mark.parametrize("dims", [2, 96])

@@ -42,6 +42,7 @@ centroids = train(x, 1024, law_recipe(len(x), 1024, 2, 0))
 | `ezmeans.law_recipe(n, k, epochs, seed, law=BatchLaw.THROUGHPUT)` | the batch size and step size from the e-means scaling law; `BatchLaw.QUALITY` is the batch eight times smaller that the e-means paper uses above 2M rows |
 | `ezmeans.cpu.train(x, k, recipe, layout=None, init=None)` | the `k × d` centroids; `init` is an optional `k × d` start |
 | `ezmeans.cpu.cpu_layout(k, d)` | the `Layout(groups, probes, regroup)` used when `layout` is `None` (below) |
+| `ezmeans.cpu.paper_layout(k)` | the layout of the ez-means paper's experiments: round(√k) groups, `default_probes(k)` probes, `Regroup.COLD`; pass it as `layout` to reproduce them |
 | `ezmeans.default_probes(k)` | the probes the GPU path uses when `probes` is `None`: 1/16 of the √k groups, at least 4 |
 
 The first call compiles `src/ezmeans/cpu/kernel.c` with `gcc` into `~/.cache/ezmeans/`. Fewer probes is faster and can miss a point's nearest centroid; probing every group is exact.

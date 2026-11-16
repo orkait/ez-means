@@ -2,7 +2,7 @@ import math
 from dataclasses import dataclass
 from enum import Enum
 
-from ezmeans.recipe import GROUP_ITERATIONS, GROUPS_PER_PROBE, group_count
+from ezmeans.recipe import GROUP_ITERATIONS, GROUPS_PER_PROBE, default_probes, group_count
 
 WARM_ITERATIONS = 2
 MIN_PROBES = 6
@@ -30,3 +30,7 @@ def cpu_layout(k: int, dims: int) -> Layout:
         return Layout(groups, min(groups, max(MIN_PROBES, math.ceil(groups / GROUPS_PER_PROBE))), Regroup.COLD)
     groups = 1 << (math.isqrt(WIDE_GROUP_FACTOR**2 * k).bit_length() - 1)
     return Layout(groups, min(groups, math.ceil(WIDE_PROBE_SPREAD * math.sqrt(groups))), Regroup.WARM)
+
+
+def paper_layout(k: int) -> Layout:
+    return Layout(group_count(k), default_probes(k), Regroup.COLD)
