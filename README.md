@@ -22,7 +22,7 @@ ez-means is a Python package for training k-means centroids on large vector sets
 
 It is for anyone who trains many centroids on millions of vectors, for example IVF index training or codebooks.
 
-## 🚀 Quickstart
+## Quickstart
 
 ```bash
 uv sync
@@ -59,7 +59,7 @@ The first call compiles `src/ezmeans/cpu/kernel.c` with `gcc` into `~/.cache/ezm
 | `KernelError(BAD_PROBES)` | the layout's probes are below 1 or above its groups |
 | `RecipeError` (a `ValueError`) | a `Recipe` with `epochs <= 0` (`EPOCHS`), `batch < 1` (`BATCH`) or `alpha0` outside (0, 1] (`STEP`), or `law_recipe` with `n < 1`, `k < 1` or `epochs <= 0` (`LAW_DOMAIN`) |
 
-## ⚡ GPU
+## GPU
 
 ```bash
 uv sync --extra gpu
@@ -76,7 +76,7 @@ centroids = train(x, 16384, law_recipe(len(x), 16384, 2, 0))
 
 `ezmeans.gpu` runs the same e-means loop as the CPU path (EMA update, mass revival, cosine step, last-epoch mean). The grouped search, the batch sums and the EMA update are Triton kernels that never synchronize the host; the loop synchronizes once per revival check. `x` is a CUDA `bfloat16` tensor; distances accumulate in `float32`. `train(x, k, recipe, probes=None, init=None)` takes an optional `k × d` CUDA `float32` start, as the CPU path does. Rows that are not finite, or whose norm passes about 9.2e18 (half the square root of the `float32` maximum, where squared distances could overflow), raise `GpuInputError(NOT_FINITE)`.
 
-## 📦 Installation
+## Installation
 
 | Requirement | Why |
 |---|---|
@@ -89,7 +89,7 @@ centroids = train(x, 16384, law_recipe(len(x), 16384, 2, 0))
 |---|---|---|
 | `EZMEANS_CACHE` | `~/.cache/ezmeans` | the compiled kernel |
 
-## 🧪 Development
+## Development
 
 ```bash
 uv run pytest
@@ -107,19 +107,20 @@ uv run mypy src tests
 
 `tests/test_gpu.py` runs only where `torch` and `triton` are installed and a CUDA device is present. The tests that hold the vendored scaling law equal to faiss run only where faiss is installed, as it is in the `dev` group.
 
-## ⚠️ Limitations
+## Limitations
 
 | Limitation | Where |
 |---|---|
 | Both paths assign by Euclidean distance only | `src/ezmeans/cpu/kernel.c`, `src/ezmeans/gpu/kernels.py` |
 | GPU results are not bit-identical run to run: the kernels and the batch sums accumulate with float atomics | `src/ezmeans/gpu/kernels.py`, `src/ezmeans/gpu/trainer.py` |
+| The GPU path holds at most 512 groups, so `k` up to 262,656; a larger `k` raises `GpuInputError(TOO_MANY_GROUPS)` | `MAX_GROUP_SPAN` in `src/ezmeans/gpu/constants.py` |
 | Tested only on Linux x86-64 with gcc; ARM, macOS and Windows are untested | none yet |
 | The CPU layout was measured only at k = 4096, 16384 and 65536; the GPU path keeps √k groups and its own probes | `src/ezmeans/cpu/layout.py` |
 
-## 🙏 Credits
+## Credits
 
 ez-means builds on [e-means](https://arxiv.org/abs/2611.09501) (Bessa et al., Meta FAIR) and on [faiss](https://github.com/facebookresearch/faiss) (MIT). `src/ezmeans/recipe.py` carries the e-means batch and step laws from `faiss.contrib.e_means` 1.16 (notice in [`NOTICE`](NOTICE)).
 
-## 📄 License
+## License
 
 Apache-2.0, Copyright 2026 Orkait. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE), which also carries the MIT notice for the vendored faiss scaling laws.
