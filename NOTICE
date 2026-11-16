@@ -1,3 +1,8 @@
+ez-means
+Copyright 2026 Orkait
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
 ez-means includes the e-means batch and step scaling laws (their fitted
 coefficients, the power-of-two rounding and the batch caps) from
 faiss/contrib/e_means/base.py in faiss 1.16.0, in src/ezmeans/recipe.py.

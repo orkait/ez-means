@@ -7,7 +7,7 @@
 ![Python](https://img.shields.io/badge/python-3.13-3776AB?logo=python&logoColor=white)
 ![C11](https://img.shields.io/badge/kernel-C11%20%2B%20OpenMP-555555?logo=c&logoColor=white)
 ![numpy](https://img.shields.io/badge/numpy-%E2%89%A52.1-013243?logo=numpy&logoColor=white)
-![License](https://img.shields.io/badge/license-MIT-green)
+![License](https://img.shields.io/badge/license-Apache--2.0-blue)
 ![Status](https://img.shields.io/badge/status-pre--release%200.0.1-orange)
 
 </div>
@@ -121,4 +121,4 @@ ez-means builds on [e-means](https://arxiv.org/abs/2611.09501) (Bessa et al., Me
 
 ## 📄 License
 
-MIT, Copyright (c) 2026 Orkait. See [`LICENSE`](LICENSE) and, for the vendored scaling laws, [`NOTICE`](NOTICE).
+Apache-2.0, Copyright 2026 Orkait. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE), which also carries the MIT notice for the vendored faiss scaling laws.
