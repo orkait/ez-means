@@ -12,7 +12,7 @@ It follows the e-means benchmark's own protocol (`benchs/e_means/paper_xb.py` in
 | e-means input | BF16 rows, and FP32 rows cast batch by batch with `CastQuantizer`; the faster of the two is the baseline |
 | Batch law | throughput at 1M rows, quality at 10M, as in the e-means paper |
 
-ez-means runs `p = 4, 8, 16` with √k groups and cold regroups, and `work_layout`.
+ez-means runs `p = 4, 8, 16` with √k groups and cold regroups, and `work_layout`. Under each dataset, the summary also prints `work_layout` over `default_layout`, paired per seed, which is the GPU comparison of layouts in the paper.
 
 ## Setup
 
