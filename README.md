@@ -36,21 +36,21 @@ We follow the 1M protocol of the e-means paper: k = 16,384, training budgets fro
 | Machine | Code | Layout | DEEP | SSNPP | SPACEV |
 |---|---|---|---|---|---|
 | 16 Zen 3 cores | paper, CPU kernel before 0.1.0 | `default_layout`: 128 groups, 8 probes | 12.7x [10.8, 16.6] | 4.6x [4.4, 4.9] | 9.7x [9.2, 10.4] |
-| RTX 3060 | paper, `b6ea6da` | `default_layout` | 5.1x [4.8, 5.6] | 4.3x [4.2, 4.5] | 4.2x [4.1, 4.6] |
-| H100 | paper, `b6ea6da` | `default_layout` | 1.0x [0.9, 1.1] | 1.0x [1.0, 1.2] | 0.9x [0.8, 1.1] |
-| H100 | 0.1.0 | `default_layout` | 1.4x [1.2, 1.5] | 1.2x [0.9, 1.3] | 1.1x [1.0, 1.2] |
-| H100 | 0.1.0 | `work_layout` | 1.3x [1.2, 1.5] | 1.2x [1.2, 1.3] | 1.1x [1.1, 1.2] |
+| RTX 3060 | paper, tag `paper-gpu` | `default_layout` | 5.1x [4.8, 5.6] | 4.3x [4.2, 4.5] | 4.2x [4.1, 4.6] |
+| H100 | paper, tag `paper-gpu` | `default_layout` | 1.0x [0.9, 1.1] | 1.0x [1.0, 1.2] | 0.9x [0.8, 1.1] |
+| H100 | tag `v0.1.0` | `default_layout` | 1.4x [1.2, 1.5] | 1.2x [0.9, 1.3] | 1.1x [1.0, 1.2] |
+| H100 | tag `v0.1.0` | `work_layout` | 1.3x [1.2, 1.5] | 1.2x [1.2, 1.3] | 1.1x [1.1, 1.2] |
 
 DEEP with 10M rows and k = 65,536 on the H100, with the quality batch law that the e-means paper uses at this size:
 
-| Layout | paper, `b6ea6da` | 0.1.0 |
+| Layout | paper, tag `paper-gpu` | tag `v0.1.0` |
 |---|---|---|
 | `default_layout`: 256 groups, 16 probes | 1.1x [1.0, 1.1] | 1.3x [1.2, 1.4] |
 | 256 groups, 8 probes | 1.6x [1.2, 1.6] | 1.8x [1.7, 2.0] |
 | 256 groups, 4 probes | 1.8x [1.6, 2.1] | 2.6x [2.2, 3.1] |
 | `work_layout` | not measured | 2.0x [1.8, 2.2] |
 
-Every row in both tables reaches the target on all 10 seeds. Each H100 column is a separate run, and the speed-ups are paired within that run. The times include the extra training that ez-means sometimes needs, at most 0.4 epochs on average at the default layout. The ez-means paper (arXiv link to follow) has the full tables, a comparison with Lloyd, SuperKMeans and scikit-learn on SIFT1M, and an analysis of why the approximate search costs so little quality.
+Every row in both tables reaches the target on all 10 seeds. The tag `paper-gpu` marks the code behind the paper's GPU tables, and `v0.1.0` this release. Each H100 column is a separate run, and the speed-ups are paired within that run. The times include the extra training that ez-means sometimes needs, at most 0.4 epochs on average at the default layout. The ez-means paper (arXiv link to follow) has the full tables, a comparison with Lloyd, SuperKMeans and scikit-learn on SIFT1M, and an analysis of why the approximate search costs so little quality.
 
 | Setting | What we measured |
 |---|---|
