@@ -11,11 +11,13 @@
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
 ![Version](https://img.shields.io/badge/version-0.1.0-orange)
 
+**[Playground](https://ez-means.pages.dev/playground)** · [Blog post](https://ez-means.pages.dev/) · [Standings](https://ez-means.pages.dev/standings) · [Results map](https://ez-means.pages.dev/results-map)
+
 </div>
 
 ez-means is a small Python package for training k-means centroids on large sets of vectors. It uses the training recipe of [e-means](https://arxiv.org/abs/2611.09501) (Bessa et al., 2026) as it is, and changes only one step. Instead of comparing each point with all k centroids, it first compares the point with about √k group centres, and then searches only the centroids of its nearest few groups. It runs as a portable C kernel on the CPU and as Triton kernels on the GPU.
 
-It may be useful if you train many centroids on millions of vectors, for example for an IVF index or a codebook. The idea is simple, and it stands on the work of the e-means authors and of faiss.
+It may be useful if you train many centroids on millions of vectors, for example for an IVF index or a codebook. The idea is simple, and it stands on the work of the e-means authors and of faiss. You can race both methods in your browser in the [playground](https://ez-means.pages.dev/playground).
 
 ## 🔍 How it works
 
