@@ -14,7 +14,7 @@ from types import ModuleType
 import numpy as np
 import torch
 
-from ezmeans import BatchLaw, Layout, Recipe, Regroup, law_recipe, work_layout
+from ezmeans import BatchLaw, Layout, Recipe, Regroup, default_layout, law_recipe, work_layout
 from ezmeans.gpu import train as ez_train
 from ezmeans.recipe import group_count
 
@@ -238,6 +238,14 @@ def crossed_seconds(record: Record) -> list[float]:
     return [s for s, c in zip(record.seconds, record.crossing, strict=True) if c is not None]
 
 
+def paired(base: Record, arm: Record) -> list[float]:
+    return [
+        b / s
+        for b, s, cb, cs in zip(base.seconds, arm.seconds, base.crossing, arm.crossing, strict=True)
+        if cb is not None and cs is not None
+    ]
+
+
 def summarize(path: Path) -> None:
     records = [Record(**raw) for raw in map(json.loads, path.read_text().splitlines())]
     for dataset in dict.fromkeys(r.dataset for r in records):
@@ -254,14 +262,20 @@ def summarize(path: Path) -> None:
             if r is base:
                 print(row + " | | |")
                 continue
-            ratios = [
-                b / s
-                for b, s, cb, cs in zip(base.seconds, r.seconds, base.crossing, r.crossing, strict=True)
-                if cb is not None and cs is not None
-            ]
+            ratios = paired(base, r)
             low, high = bootstrap(ratios)
             note = f" (misses {misses} of {len(r.crossing)})" if misses else ""
             print(row + f" {statistics.median(ratios):.2f}{note} | [{low:.2f}, {high:.2f}] | {sign_test(ratios):.3f} |")
+        by_name = {r.arm: r for r in arms}
+        default = by_name.get(EzArm(default_layout(base.k).probes).name)
+        derived = by_name.get(EzArm(None).name)
+        if default is not None and derived is not None:
+            ratios = paired(default, derived)
+            low, high = bootstrap(ratios)
+            print(
+                f"\n{derived.arm} over {default.arm} (default_layout): {statistics.median(ratios):.2f} "
+                f"[{low:.2f}, {high:.2f}], sign test p {sign_test(ratios):.3f}"
+            )
 
 
 def main() -> None:
