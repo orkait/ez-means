@@ -11,7 +11,7 @@
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
 ![Version](https://img.shields.io/badge/version-0.1.1-orange)
 
-**[Playground](https://ez-means.pages.dev/playground)** · [Blog post](https://ez-means.pages.dev/) · [Standings](https://ez-means.pages.dev/standings) · [Results map](https://ez-means.pages.dev/results-map)
+**[Playground](https://ez-means.pages.dev/playground)** · [Paper (preprint)](https://github.com/orkait/ez-means/releases/tag/paper-v1) · [Blog post](https://ez-means.pages.dev/) · [Standings](https://ez-means.pages.dev/standings) · [Results map](https://ez-means.pages.dev/results-map)
 
 </div>
 
@@ -52,7 +52,7 @@ DEEP with 10M rows and k = 65,536 on the H100, with the quality batch law that t
 | 256 groups, 4 probes | 1.8x [1.6, 2.1] | 2.6x [2.2, 3.1] |
 | `work_layout` | not measured | 2.0x [1.8, 2.2] |
 
-Every row in both tables reaches the target on all 10 seeds. The tag `paper-gpu` marks the code behind the paper's GPU tables, and `v0.1.0` this release. Each H100 column is a separate run, and the speed-ups are paired within that run. The times include the extra training that ez-means sometimes needs, at most 0.4 epochs on average at the default layout. The ez-means paper (arXiv link to follow) has the full tables, a comparison with Lloyd, SuperKMeans and scikit-learn on SIFT1M, and an analysis of why the approximate search costs so little quality.
+Every row in both tables reaches the target on all 10 seeds. The tag `paper-gpu` marks the code behind the paper's GPU tables, and `v0.1.0` the first release. Each H100 column is a separate run, and the speed-ups are paired within that run. The times include the extra training that ez-means sometimes needs, at most 0.4 epochs on average at the default layout. The [ez-means paper](https://github.com/orkait/ez-means/releases/tag/paper-v1) (preprint; arXiv link to follow) has the full tables, a comparison with Lloyd, SuperKMeans and scikit-learn on SIFT1M, and an analysis of why the approximate search costs so little quality.
 
 | Setting | What we measured |
 |---|---|
