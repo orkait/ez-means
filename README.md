@@ -9,7 +9,7 @@
 ![Triton](https://img.shields.io/badge/GPU-Triton-76B900?logo=nvidia&logoColor=white)
 ![numpy](https://img.shields.io/badge/numpy-%E2%89%A52.1-013243?logo=numpy&logoColor=white)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
-![Version](https://img.shields.io/badge/version-0.1.0-orange)
+![Version](https://img.shields.io/badge/version-0.1.1-orange)
 
 **[Playground](https://ez-means.pages.dev/playground)** · [Blog post](https://ez-means.pages.dev/) · [Standings](https://ez-means.pages.dev/standings) · [Results map](https://ez-means.pages.dev/results-map)
 
@@ -29,7 +29,7 @@ It may be useful if you train many centroids on millions of vectors, for example
 | 4 | Only the members of those groups are searched, exactly | about 8 × 128 = 1,024 |
 | | **Total, against 16,384 for e-means** | **about 1,152, or 7%** |
 
-On the CPU, each distance computation also stops as soon as its partial sum passes the best distance found so far, so the search inside the chosen groups stays exact. When every group is searched, the assignment is the same as the brute-force one. Everything else, namely the batch-size and step-size laws, the moving-average update, the revival of unused clusters and the mean over the last epoch, is the e-means recipe, unchanged.
+On the CPU, each distance computation also stops as soon as its partial sum passes the best distance found so far, so the search inside the chosen groups stays exact. When every group is searched, the assignment is the same as the brute-force one. Everything else, namely the batch-size and step-size laws, the moving-average update, the revival of unused clusters and the mean over the last epoch, is the e-means recipe, unchanged. As in faiss, revival is off by default for data with two or fewer dimensions; a `Recipe` with an explicit `tau` overrides that.
 
 ## 📊 Results
 

@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 REVIVAL_THRESHOLD = 0.1
+NO_REVIVAL_MAX_DIMS = 2
 INIT_USAGE = 2.0**-16
 CHECK_EVERY = 5
 ALPHA_MIN_FACTOR = 0.1
@@ -39,7 +40,7 @@ class Recipe:
     epochs: float
     batch: int
     alpha0: float
-    tau: float
+    tau: float | None
     seed: int
 
     def __post_init__(self) -> None:
@@ -49,6 +50,12 @@ class Recipe:
             raise RecipeError(RecipeFault.BATCH)
         if not 0 < self.alpha0 <= MAX_ALPHA0:
             raise RecipeError(RecipeFault.STEP)
+
+
+def revival_threshold(tau: float | None, dims: int) -> float:
+    if tau is not None:
+        return tau
+    return 0.0 if dims <= NO_REVIVAL_MAX_DIMS else REVIVAL_THRESHOLD
 
 
 def group_count(k: int) -> int:
@@ -89,4 +96,4 @@ def law_recipe(n: int, k: int, epochs: float, seed: int, law: BatchLaw = BatchLa
     batch = max(1, min(law_batch, cap, n))
     step, k_power, batch_power, n_power, epochs_power = STEP_LAW
     alpha0 = step * k**k_power * batch**batch_power * n**n_power * epochs**epochs_power
-    return Recipe(epochs, batch, min(max(alpha0, MIN_ALPHA0), MAX_ALPHA0), REVIVAL_THRESHOLD, seed)
+    return Recipe(epochs, batch, min(max(alpha0, MIN_ALPHA0), MAX_ALPHA0), None, seed)

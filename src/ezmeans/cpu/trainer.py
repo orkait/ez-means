@@ -1,7 +1,15 @@
 from ezmeans.cpu import native
 from ezmeans.cpu.native import Matrix
 from ezmeans.layout import Layout, Regroup, default_layout
-from ezmeans.recipe import ALPHA_MIN_FACTOR, CHECK_EVERY, INIT_USAGE, SPLIT_EPSILON, Recipe, epoch_rows
+from ezmeans.recipe import (
+    ALPHA_MIN_FACTOR,
+    CHECK_EVERY,
+    INIT_USAGE,
+    SPLIT_EPSILON,
+    Recipe,
+    epoch_rows,
+    revival_threshold,
+)
 
 
 def train(x: Matrix, k: int, recipe: Recipe, layout: Layout | None = None, init: Matrix | None = None) -> Matrix:
@@ -14,7 +22,7 @@ def train(x: Matrix, k: int, recipe: Recipe, layout: Layout | None = None, init:
         seed=recipe.seed,
         alpha0=recipe.alpha0,
         alpha_min_factor=ALPHA_MIN_FACTOR,
-        tau=recipe.tau,
+        tau=revival_threshold(recipe.tau, x.shape[1]),
         init_usage=INIT_USAGE,
         split_epsilon=SPLIT_EPSILON,
         groups=chosen.groups,

@@ -16,6 +16,7 @@ from ezmeans.recipe import (
     SPLIT_EPSILON,
     Recipe,
     epoch_rows,
+    revival_threshold,
 )
 
 
@@ -106,7 +107,7 @@ class Steps:
 
 def revive(centroids: torch.Tensor, usage: torch.Tensor, recipe: Recipe, generator: torch.Generator) -> None:
     k = len(usage)
-    unused = usage < usage.sum() * recipe.tau / k
+    unused = usage < usage.sum() * revival_threshold(recipe.tau, centroids.shape[1]) / k
     donors = ~unused & (usage > 0)
     chosen = torch.arange(k, device=usage.device) < torch.minimum(unused.sum(), donors.sum())
     draw = torch.rand(k, generator=generator, device=usage.device).clamp(min=torch.finfo(torch.float32).tiny)

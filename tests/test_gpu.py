@@ -5,6 +5,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 import torch
+from cases import LONE, SINGLE_GROUP, STARTS, lone_cluster
 from torch.profiler import DeviceType, ProfilerActivity, profile
 
 from ezmeans import Layout, Recipe, Regroup, cpu, law_recipe
@@ -223,3 +224,12 @@ def test_bad_input_raises_gpu_input_error(call: Callable[[], object], fault: Fau
     with pytest.raises(GpuInputError) as raised:
         call()
     assert raised.value.fault is fault
+
+
+@pytest.mark.parametrize(("dims", "keeps_lone"), [(1, True), (3, False)])
+def test_default_revival_follows_faiss_for_the_dimension(dims: int, keeps_lone: bool) -> None:
+    case = lone_cluster(dims, SEED)
+    rows = torch.from_numpy(case.rows).cuda().to(torch.bfloat16)
+    start = torch.from_numpy(case.start).cuda()
+    centroids = train(rows, len(STARTS), case.recipe, SINGLE_GROUP, init=start).cpu().numpy()
+    assert bool(np.isclose(centroids[:, 0], LONE).any()) is keeps_lone

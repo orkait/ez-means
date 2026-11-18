@@ -3,7 +3,7 @@ from collections.abc import Callable
 
 import pytest
 
-from ezmeans.recipe import BatchLaw, RecipeError, RecipeFault, default_probes, law_recipe
+from ezmeans.recipe import BatchLaw, RecipeError, RecipeFault, default_probes, law_recipe, revival_threshold
 
 ROWS = 4096
 CLUSTERS = 256
@@ -65,3 +65,10 @@ def test_law_matches_faiss(n: int, k: int, epochs: float, law: BatchLaw) -> None
 )
 def test_default_probes_cover_a_sixteenth_of_the_groups(k: int, probes: int) -> None:
     assert default_probes(k) == probes
+
+
+@pytest.mark.parametrize("dims", [1, 2, 3, 96])
+@pytest.mark.parametrize("tau", [None, 0.0, 0.25])
+def test_revival_threshold_matches_faiss(tau: float | None, dims: int) -> None:
+    base = pytest.importorskip("faiss.contrib.e_means.base")
+    assert revival_threshold(tau, dims) == base._resolve_unused_threshold(tau, dims)
