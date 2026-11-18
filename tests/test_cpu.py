@@ -10,13 +10,14 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from cases import LONE, SINGLE_GROUP, STARTS, lone_cluster
 
 from ezmeans import Layout, Regroup, default_layout, law_recipe
 from ezmeans.config import CACHE_VARIABLE, COMPILER_VARIABLE, KERNEL_COMPILE, TARGET_VARIABLE
 from ezmeans.cpu import KernelError, KernelStatus, native, train
 from ezmeans.cpu.build import KERNEL_SOURCE
 from ezmeans.cpu.native import Labels, Matrix
-from ezmeans.recipe import group_count
+from ezmeans.recipe import REVIVAL_THRESHOLD, group_count
 
 ROWS = 4096
 CLUSTERS = 256
@@ -215,6 +216,20 @@ def test_centroids_do_not_depend_on_compiler_or_target(tmp_path: Path) -> None:
 
 def test_cpu_training_runs_without_faiss() -> None:
     subprocess.run([sys.executable, "-c", BLOCK_FAISS + TRAIN_SCRIPT], capture_output=True, check=True)
+
+
+@pytest.mark.parametrize(("dims", "keeps_lone"), [(1, True), (2, True), (3, False)])
+def test_default_revival_follows_faiss_for_the_dimension(dims: int, keeps_lone: bool) -> None:
+    case = lone_cluster(dims, SEED)
+    centroids = train(case.rows, len(STARTS), case.recipe, SINGLE_GROUP, init=case.start)
+    assert bool(np.isclose(centroids[:, 0], LONE).any()) is keeps_lone
+
+
+def test_an_explicit_revival_threshold_applies_at_any_dimension() -> None:
+    case = lone_cluster(1, SEED)
+    recipe = dataclasses.replace(case.recipe, tau=REVIVAL_THRESHOLD)
+    centroids = train(case.rows, len(STARTS), recipe, SINGLE_GROUP, init=case.start)
+    assert not np.isclose(centroids[:, 0], LONE).any()
 
 
 def test_kernel_compiles_without_strict_warnings(tmp_path: Path) -> None:
